@@ -1,0 +1,117 @@
+---
+title: "RNA_Kras_inhibition_YAP"
+output: html_document
+date: "2024-12-19"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(readxl)
+library(clusterProfiler)
+library(enrichplot)
+
+```
+
+
+```{r}
+
+yap = read_excel("data/P5vsP1/41586_2015_BFnature15382_MOESM27_ESM.xlsx")%>%
+  as.data.frame()%>%
+  dplyr::select(Gene_Symbol, Fold_log2)%>%
+  dplyr::filter(Fold_log2 < -2)
+
+de_3dveh = readRDS("data/KrasInhibition/inhibit3d_veh_res.rds")
+de_14dveh = readRDS("data/KrasInhibition/inhibit14d_veh_res.rds")
+
+
+
+feature_df = data.frame(set = rep("YAP", length(yap$Gene_Symbol)),
+                        gene = yap$Gene_Symbol,
+                        stringsAsFactors = F)
+
+
+
+
+```
+
+
+### 3 day vs vehicle
+```{r}
+
+
+
+
+
+res_df_3_av = de_3dveh%>%
+  dplyr::select(symbol, t)%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::summarise(t = mean(t))
+
+geneList = res_df_3_av$t
+names(geneList) = res_df_3_av$symbol
+geneList = sort(geneList, decreasing = T)
+
+
+
+set.seed(47382686)
+y <- GSEA(geneList, TERM2GENE = feature_df, pvalueCutoff = 1, minGSSize = 5, maxGSSize = 700)
+
+
+
+
+nes = paste(paste0(y@result$Description, ":", round(y@result$NES,2)), collapse = "; ")
+
+gseaplot2(y, geneSetID = 1,pvalue_table = T, color = "darkorange",
+           title = paste0("YAP 3d NES ",nes))
+ 
+```
+
+
+### 14 day vs vehicle
+```{r}
+
+
+
+
+res_df_14_av = de_14dveh%>%
+  dplyr::select(symbol, t)%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::summarise(t = mean(t))
+
+geneList = res_df_14_av$t
+names(geneList) = res_df_14_av$symbol
+geneList = sort(geneList, decreasing = T)
+
+
+
+set.seed(47382686)
+y_14 <- GSEA(geneList, TERM2GENE = feature_df, pvalueCutoff = 1, minGSSize = 5, maxGSSize = 700)
+
+
+nes = paste(paste0(y_14@result$Description, ":", round(y_14@result$NES,2)), collapse = "; ")
+
+gseaplot2(y_14, geneSetID = 1,pvalue_table = T, color = "steelblue",
+           title = paste0("YAP 14d NES ",nes))
+
+ 
+
+
+
+
+
+
+```
+

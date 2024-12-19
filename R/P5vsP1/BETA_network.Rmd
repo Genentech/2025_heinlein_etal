@@ -1,0 +1,164 @@
+---
+title: "BETA_network"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(matrixStats)
+
+
+
+```
+
+
+
+
+```{r}
+get_edge = fread("data/P5vsP1/all_edge.tsv",
+            stringsAsFactors = F)
+
+resp51 = readRDS("data/P5vsP1/res_P5_P1.rds")
+
+res_df = fread("data/P5vsP1/BETA_signature.tsv", stringsAsFactors = F)
+
+
+```
+
+
+```{r}
+
+sel_edge = get_edge%>%
+  dplyr::filter(motif %in% c("BATF", "Atf3", "Fra1", "Fos", "JunB", "AP-1","LEF1", "Tcf3", "Tcf7", "TCFL2","Atf7","CREB5","Atf1","Atf2","Bach2"))%>%
+  dplyr::mutate(motifDir = case_when(motif_dir == "down" ~ paste0(motif, "_d"),
+                                      motif_dir == "up" ~ paste0(motif, "_u")))
+
+
+
+clean_sel_edge = sel_edge%>%
+  dplyr::select(motif,motif_dir, motif_cat, GeneSymbol, edge_v)%>%
+  dplyr::group_by(motif, motif_dir, motif_cat, GeneSymbol)%>%
+  dplyr::summarise(edge_v = mean(edge_v))%>%
+  dplyr::ungroup()%>%
+  dplyr::mutate(abs_edge_v = abs(edge_v))%>%
+  dplyr::mutate(motif = toupper(motif))
+
+
+```
+
+### node list 
+
+```{r}
+
+
+gene_list = resp51%>%
+  dplyr::left_join(res_df, by = c("symbol" = "gene"))%>%
+  na.omit()%>%
+  as.data.frame()%>%
+  #dplyr::filter(symbol %in% clean_sel_edge$GeneSymbol)%>%
+  dplyr::select(symbol, LogFC, FDR, set)%>%
+  dplyr::mutate(stat = LogFC * -log10(FDR))%>%
+  dplyr::rename(ID = symbol)%>%
+  dplyr::select(-LogFC)%>%
+  dplyr::select(-FDR)%>%
+  dplyr::mutate(type = "target")%>%
+  dplyr::mutate(dir = "none")%>%
+  dplyr::mutate(motif_cat = "none")
+
+
+motif_list = clean_sel_edge%>%
+  dplyr::select(motif, motif_dir, motif_cat)%>%
+  dplyr::mutate(stat = 0)%>%
+  unique()%>%
+  dplyr::rename(ID = motif)%>%
+  dplyr::mutate(type= "motif")%>%
+  dplyr::rename(dir = motif_dir)%>%
+  dplyr::mutate(ID = toupper(ID))%>%
+  dplyr::select(ID, stat, type, dir, motif_cat)
+
+## doubles 
+ddf = as.data.frame(table(motif_list$ID), stringsAsFactors = F)%>%
+  dplyr::arrange(desc(Freq))%>%
+  dplyr::filter(Freq ==2)
+
+motif_list_unique = motif_list%>%
+  dplyr::mutate(dir = case_when(ID %in% ddf$Var1 ~ "both", 
+                                T ~ dir))%>%
+  unique()%>%
+  dplyr::mutate(set = "motif")
+
+
+node_list = rbind(gene_list, motif_list_unique)
+
+
+write.table(node_list, "data/P5vsP1/BETA_node.tsv", 
+            quote= F, row.names = F, sep = "\t")
+```
+
+### edge list
+
+```{r}
+
+edge = clean_sel_edge%>%
+  dplyr::mutate(class = case_when(motif %in% c("BATF", "ATF3", "FRA1", "FOS", "JUNB", "AP-1","BACH2") ~ "MAPK1",
+                                 motif %in% c( "ATF1", "ATF2", "ATF7", "CREB5") ~ "MAPK2",
+                             motif %in% c("LEF1", "TCF3", "TCF7", "TCFL2") ~ "WNT"))%>%
+  dplyr::left_join(res_df, by = c("GeneSymbol" = "gene"))%>%
+    dplyr::filter(abs_edge_v >= -log10(0.0001))%>%
+  na.omit()
+
+
+write.table(edge, "data/P5vsP1/BETA_edge.tsv", 
+            quote= F, row.names = F, sep = "\t")
+
+```
+
+
+
+
+#### combine motifs for simplier visualization
+
+```{r}
+edge_class = edge%>%
+  dplyr::group_by(GeneSymbol, set, motif_dir, class)%>%
+  dplyr::summarise(edge_v = mean(edge_v, na.rm = T), 
+                   abs_edge_v = mean(abs_edge_v, na.rm = T))%>%
+  dplyr::ungroup()%>%
+  as.data.frame()
+  
+cm = data.frame(ID = c("MAPK1","MAPK2","WNT"), 
+                stat = 0,
+                type = "motif",
+                dir = c("both","down","down"),
+                motif_cat = c("bZIP","bZIP","HMG"),
+                set = "motif", 
+                stringsAsFactors = F)
+
+node_list = rbind(gene_list, cm)
+
+
+write.table(edge_class, "data/P5vsP1/BETA_edge_class.tsv", 
+            quote= F, row.names = F, sep = "\t")
+
+write.table(node_list, "data/P5vsP1/BETA_node_class.tsv", 
+            quote= F, row.names = F, sep = "\t")
+
+```
+
+

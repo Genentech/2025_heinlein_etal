@@ -1,0 +1,118 @@
+---
+title: "RNA_kras_inhibit_PCA"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+make PCA 
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+
+
+
+  
+plot_pca = function(ori_data, tag, type_annot,
+                    col_code)
+{
+
+
+df = ori_data%>%
+  na.omit()
+df_mat = as.matrix(df)
+
+
+
+pc = prcomp(t(df_mat))
+pc_v = pc$sdev/sum(pc$sdev)*100
+pc_v = round(pc_v, 2)
+
+pc_df = data.frame(sample = colnames(df), 
+                   type = type_annot,
+                   PC1 = pc$x[,1], PC2 = pc$x[,2], stringsAsFactors = F)
+
+  
+  mark_t = as.data.frame(table(pc_df$type))%>%
+    dplyr::left_join(col_code, by = c("Var1" = "type"))%>%
+    dplyr::arrange(Var1)
+  
+  
+  wid = max(pc_df$PC1) - min(pc_df$PC1)
+  hei = max(pc_df$PC2) - min(pc_df$PC2)
+
+  
+  p = ggplot(pc_df, aes(PC1,PC2))+
+    geom_point(aes(color = type),
+                size = 3) +
+    scale_colour_manual(values=mark_t$color, name = "", labels = mark_t$Var1)+
+
+    theme_bw()+
+    theme(text = element_text(size=10)) +
+    coord_fixed(ratio = wid/hei)+
+    ggtitle(tag)+
+    labs(x= paste0("PC1 ", pc_v[1], "%"),
+         y = paste0("PC2 ", pc_v[2], "%"))
+  
+  return(p)
+  
+}
+
+
+
+
+```
+
+
+
+```{r}
+kras_lcpm = fread("data/KrasInhibition/filter_lcpm_expression.tsv", stringsAsFactors = F, data.table = F)
+
+kras_lcpm = kras_lcpm[, -c(1,2)]
+
+
+```
+
+```{r}
+
+
+  kras_col  = data.frame(type = c("vehicle","MRTX1133_3d","MRTX1133_14d"),
+                         color = c("black","darkorange", "steelblue"),
+                         stringsAsFactors = F)
+    kras_tag = "Kras inhibition"
+    kras_annot =  c(rep("vehicle",4),
+                            rep("MRTX1133_3d", 4),
+                            rep("MRTX1133_14d", 4))
+    
+    
+    p_kras = plot_pca(ori_data = kras_lcpm, 
+                      tag = kras_tag, 
+                      type_annot = kras_annot, 
+                      col_code = kras_col)
+    
+p_kras
+
+```
+
+
+

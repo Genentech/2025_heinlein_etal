@@ -1,0 +1,72 @@
+---
+title: "CALGB_survival"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(msigdbr)
+library(stringr)
+library(scales)
+library(survival)
+library(survminer)
+library(parallel)
+library(ggrepel)
+library(ggfortify)
+
+source("R/human/avant_calgb_survival_functions.R")
+
+```
+
+
+
+```{r}
+
+meta = fread("data/human/compiled_meta_calgb_table.tsv"
+             , stringsAsFactors = F, data.table = F)%>%
+  dplyr::mutate(cb = paste(c_mapk, c_wnt, sep = "_"))%>%
+    dplyr::mutate(cb = factor(cb, levels  = c("low_high","high_low", "low_low","high_high")))
+
+
+  ev = "OS"
+    sel_c_feat = which(colnames(meta) == "cb")
+    sel_c_time = which(colnames(meta) == ev)
+    sel_c_event = which(colnames(meta) ==   paste0(ev, ".stat"))
+  
+  
+    set_data = meta[,c(sel_c_time,sel_c_event, sel_c_feat)]
+    colnames(set_data) = c("time","event", "feature")
+    set_data$feature_group = set_data$feature
+    
+    res1 = analyze_survival_highLow_monthTyear_2(set_data[which(set_data$feature %in% c("high_low","low_high")),], 
+                          event = ev, 
+                          feature = "cb")
+    
+
+
+    res1[[2]]
+
+    
+    
+```
+
+
+

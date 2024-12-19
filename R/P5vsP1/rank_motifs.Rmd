@@ -1,0 +1,113 @@
+---
+title: "rank_motifs"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(ggrepel)
+library(Rmpfr)
+
+
+```
+
+
+
+### Up
+
+```{r}
+
+motif_up = fread("data/P5vsP1/up_motif.txt", stringsAsFactors = F, data.table = F)
+
+motif_name = toupper(gsub("\\(.*","", motif_up[,1]))
+
+motif_sig = -log10(mpfr(motif_up$`P-value`, precBits = 500))
+
+m_df = data.frame(name = motif_name, sig = as.numeric(motif_sig), 
+                  stringsAsFactors = F)%>%
+  dplyr::mutate(rank = row_number())
+
+
+
+
+ p = ggplot(m_df[1:60,], aes(rank, sig))+
+    geom_point(color = "red",
+               size = 3) +
+    geom_text_repel(data = m_df[1:20,],
+                    aes(label = name),
+                    color ="black",
+                    size = 3,
+                    segment.size = 0.3,
+                    segment.alpha = 0.3,
+                    force = 4,
+                    max.overlaps = Inf,
+                    box.padding = unit(0.35, "lines"),
+                    point.padding = unit(0.3, "lines"),
+                    seed = 123)+
+    theme_classic()+
+    theme(text = element_text(size=10)) +
+    ggtitle(" Motif enrichment in P5 opening regions")+
+    labs(x="rank", y = "-log10(p-value)")
+ 
+p
+
+```
+
+
+
+```{r}
+
+
+motif_down = fread("data/P5vsP1/down_motif.txt", stringsAsFactors = F, data.table = F)
+
+motif_name = toupper(gsub("\\(.*","", motif_down[,1]))
+
+
+motif_sig = -log10(mpfr(motif_down$`P-value`, precBits = 500))
+
+m_df = data.frame(name = motif_name, sig = as.numeric(motif_sig), 
+                  stringsAsFactors = F)%>%
+  dplyr::mutate(rank = row_number())
+
+
+ p = ggplot(m_df[1:60,], aes(rank, sig))+
+    geom_point(color = "blue",
+               size = 3) +
+    geom_text_repel(data = m_df[1:20,],
+                    aes(label = name),
+                    color ="black",
+                    size = 3,
+                    segment.size = 0.3,
+                    segment.alpha = 0.3,
+                    force = 4,
+                    max.overlaps = Inf,
+                    box.padding = unit(0.35, "lines"),
+                    point.padding = unit(0.3, "lines"),
+                    seed = 123)+
+    theme_classic()+
+    theme(text = element_text(size=10)) +
+    ggtitle(" Motif enrichment in P1 opening regions")+
+    labs(x="rank", y = "-log10(p-value)")
+
+ 
+ 
+p
+ 
+```
+
+

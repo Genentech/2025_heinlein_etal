@@ -1,0 +1,276 @@
+---
+title: "mapk_wnt_heatmap"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(readxl)
+library(circlize)
+library(ComplexHeatmap)
+library(igis) # gRED internal 
+library(matrixStats)
+library(biomaRt)
+
+
+
+
+square_cal = function(n)
+{
+  if(n > 1)
+  {
+      c = ceiling(log10(n))
+  p = n/(10**c)
+  }else{
+    p = 0.1
+  }
+
+  
+  
+  return(p)
+  
+}
+
+```
+
+```{r}
+
+mlist = c("Spred1","Spred2", "Ets","Spry2", "Spry4", "Etv1", "Etv4", "Etv6", "Dusp4","Dusp6")
+wlist = c("Lgr5", "Axin2", "Ascl2", "Slc12a2", "Gkn33p", "Nkd1", "Wif1", "Smoc2")
+
+
+expr = fread("data/P5vsP1/filter_lcpm_expression_correct.tsv", 
+            stringsAsFactors = F)
+resp15 = readRDS("data/P5vsP1/res_P5_P1.rds")
+
+```
+
+### MAPK
+
+```{r}
+
+sel_expr = data.frame(symbol = mlist, stringsAsFactors = F) %>%
+  dplyr::left_join(expr, by = "symbol")%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::mutate(n = row_number())%>%
+  dplyr::mutate(symbol = case_when(n !=1 ~ paste0(symbol, ".", n), 
+                                   T ~ symbol))%>%
+  as.data.frame()%>%
+  na.omit()
+  
+
+expr_mat = as.matrix(sel_expr[, c(3:9)])
+colnames(expr_mat) = colnames(sel_expr)[3:9]
+rownames(expr_mat) = sel_expr$symbol
+
+
+
+r_m = rowMeans(expr_mat)
+r_sd = rowSds(expr_mat)
+stan_expr = sweep(expr_mat, 1, r_m)
+stan_expr = sweep(stan_expr, 1, r_sd, FUN = "/")
+
+col_fun_expr = colorRamp2(c(-2, 0, 2), c("blue","white", "red"))
+
+
+ta = HeatmapAnnotation(group =c(rep("P1",4), rep("P5",3)), 
+                       col = list(group = c("P1" = "#2D8686",
+                                            "P5" = "#862D2D")))
+
+
+
+hei = unit(square_cal(nrow(stan_expr))*10, "cm")
+
+
+h1 = Heatmap(as.matrix(stan_expr),
+             width = hei*(ncol(stan_expr)/nrow(stan_expr)),
+                          height =hei,
+             name = "standardized expression",
+             col = col_fun_expr,
+             row_names_side = "left",
+             row_names_gp = gpar(fontsize = 8),
+             column_names_gp = gpar(fontsize = 4),
+             rect_gp = gpar(col = "black", lwd = 0.5),
+             top_annotation = ta, 
+             cluster_rows = T, cluster_columns = F,
+             column_split = factor(c(rep("P1",4), rep("P5",3)), levels = c("P1", "P5")))
+
+
+
+
+lf_df = rbindlist(lapply(1:nrow(stan_expr), function(x) {
+  this_gene = rownames(stan_expr)[x]
+     gp15 = resp15%>%
+          dplyr::filter(symbol == this_gene)
+
+    
+  df = data.frame(gene = this_gene,
+                  lf_p15 = NA, 
+                  fdr_p15 = NA, 
+                  sig_p15 = "",
+                  stringsAsFactors = F)
+ 
+  if(nrow(gp15) >0)
+  {
+        df$lf_p15 = gp15$LogFC[1]
+        df$fdr_p15 =  gp15$FDR[1]
+             if(gp15$FDR[1] <= 0.05)
+        df$sig_p15 = "*"
+
+  }
+  
+  return(df)
+  
+}))
+
+
+
+
+
+sig_mat = as.matrix(lf_df[,4])
+
+lf_mat = as.matrix(lf_df[,2])
+colnames(lf_mat) ="P5vsP1"
+rownames(lf_mat) = lf_df$gene
+
+col_fun = colorRamp2(c(-2, 0,2), c("blue", "white", "red"))
+
+h2 = Heatmap(as.matrix(lf_mat),
+             name = "Log2 FC",
+             col = col_fun,
+             row_names_gp = gpar(fontsize = 10),
+             width = unit(square_cal(nrow(lf_mat))/nrow(lf_mat)*10, "cm"), 
+             show_row_names = F,
+             height = hei,
+             column_names_gp = gpar(fontsize = 7),
+             cell_fun = function(j, i, x, y, width, height, fill) {
+             grid.text(sprintf("%s", sig_mat[i, j]), x, y, gp = gpar(fontsize = 8))
+},
+             rect_gp = gpar(col = "black", lwd = 0.5),
+             cluster_rows = F, cluster_columns = F)
+
+h1+h2
+ 
+```
+
+### Wnt
+
+```{r}
+
+sel_expr = data.frame(symbol = wlist, stringsAsFactors = F) %>%
+  dplyr::left_join(expr, by = "symbol")%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::mutate(n = row_number())%>%
+  dplyr::mutate(symbol = case_when(n !=1 ~ paste0(symbol, ".", n), 
+                                   T ~ symbol))%>%
+  as.data.frame()%>%
+  na.omit()
+  
+
+expr_mat = as.matrix(sel_expr[, c(3:9)])
+colnames(expr_mat) = colnames(sel_expr)[3:9]
+rownames(expr_mat) = sel_expr$symbol
+
+
+
+r_m = rowMeans(expr_mat)
+r_sd = rowSds(expr_mat)
+stan_expr = sweep(expr_mat, 1, r_m)
+stan_expr = sweep(stan_expr, 1, r_sd, FUN = "/")
+
+col_fun_expr = colorRamp2(c(-2, 0, 2), c("blue","white", "red"))
+
+
+ta = HeatmapAnnotation(group =c(rep("P1",4), rep("P5",3)), 
+                       col = list(group = c("P1" = "#2D8686",
+                                            "P5" = "#862D2D")))
+
+
+hei = unit(square_cal(nrow(stan_expr))*10, "cm")
+
+h1 = Heatmap(as.matrix(stan_expr),
+             width = unit(square_cal(ncol(stan_expr))*10, "cm"), 
+                          height =hei,
+             name = "standardized expression",
+             col = col_fun_expr,
+             row_names_side = "left",
+             row_names_gp = gpar(fontsize = 8),
+             column_names_gp = gpar(fontsize = 4),
+             rect_gp = gpar(col = "black", lwd = 0.5),
+             top_annotation = ta, 
+             cluster_rows = T, cluster_columns = F,
+             column_split = factor(c(rep("P1",4), rep("P5",3)), levels = c("P1", "P5")))
+
+
+lf_df = rbindlist(lapply(1:nrow(stan_expr), function(x) {
+  this_gene = rownames(stan_expr)[x]
+     gp15 = resp15%>%
+          dplyr::filter(symbol == this_gene)
+
+    
+  df = data.frame(gene = this_gene,
+                  lf_p15 = NA, 
+                  fdr_p15 = NA, 
+                  sig_p15 = "",
+                  stringsAsFactors = F)
+ 
+  if(nrow(gp15) >0)
+  {
+        df$lf_p15 = gp15$LogFC[1]
+        df$fdr_p15 =  gp15$FDR[1]
+             if(gp15$FDR[1] <= 0.05)
+        df$sig_p15 = "*"
+
+  }
+  
+  return(df)
+  
+}))
+
+
+
+
+
+sig_mat = as.matrix(lf_df[,4])
+
+lf_mat = as.matrix(lf_df[,2])
+colnames(lf_mat) ="P5vsP1"
+rownames(lf_mat) = lf_df$gene
+
+col_fun = colorRamp2(c(-2, 0,2), c("blue", "white", "red"))
+
+h2 = Heatmap(as.matrix(lf_mat),
+             name = "Log2 FC",
+             col = col_fun,
+             row_names_gp = gpar(fontsize = 10),
+             width = unit(square_cal(nrow(lf_mat))/nrow(lf_mat)*10, "cm"), 
+             show_row_names = F,
+             height = hei,
+             column_names_gp = gpar(fontsize = 7),
+             cell_fun = function(j, i, x, y, width, height, fill) {
+             grid.text(sprintf("%s", sig_mat[i, j]), x, y, gp = gpar(fontsize = 8))
+},
+             rect_gp = gpar(col = "black", lwd = 0.5),
+             cluster_rows = F, cluster_columns = F)
+
+h1+h2
+
+```
+
+
+

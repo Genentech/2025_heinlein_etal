@@ -1,0 +1,76 @@
+---
+title: "RNA_P5_P1_YAP"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(readxl)
+library(clusterProfiler)
+library(enrichplot)
+
+```
+
+
+```{r}
+
+yap = read_excel("data/P5vsP1/41586_2015_BFnature15382_MOESM27_ESM.xlsx")%>%
+  as.data.frame()%>%
+  dplyr::select(Gene_Symbol, Fold_log2)%>%
+  dplyr::filter(Fold_log2 < -2)
+
+
+feature_df = data.frame(set = rep("YAP", length(yap$Gene_Symbol)),
+                        gene = yap$Gene_Symbol,
+                        stringsAsFactors = F)
+
+
+
+
+```
+
+
+### In the P5 vs P1 data 
+
+
+```{r}
+
+res_df = readRDS("data/P5vsP1/res_P5_P1.rds")
+
+
+res_df_av = res_df%>%
+  dplyr::select(symbol, t)%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::summarise(t = mean(t))
+
+geneList = res_df_av$t
+names(geneList) = res_df_av$symbol
+geneList = sort(geneList, decreasing = T)
+  
+
+set.seed(47382686)
+
+y <- GSEA(geneList, TERM2GENE = feature_df, pvalueCutoff = 1)
+
+g = gseaplot2(y,  geneSetID = 1,pvalue_table = T, title = paste0("YAP", " NES: ", round(y@result$NES[1], 2)))
+
+g
+
+```
+

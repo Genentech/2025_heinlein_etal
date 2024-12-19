@@ -1,0 +1,204 @@
+---
+title: "create_bigwig_gviz_visualization"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(Gviz)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(rtracklayer)
+library(GenomicRanges)
+
+```
+
+
+
+
+
+
+
+### Emp1
+
+```{r}
+
+emp1_smoc2 = readRDS("data/P5vsP1/emp1_smoc2_motif_peak.Rds")
+
+
+av_bw = grep("\\.bigwig", list.files("/gstore/project/crc_metastasis/bam_norm_bigwig_vis/group_average_bw/"), value = T)
+av_bw_path = paste0("/gstore/project/crc_metastasis/bam_norm_bigwig_vis/group_average_bw/", av_bw)
+sample_names = gsub("\\..*", "", av_bw)
+txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
+
+granges_list = lapply(1:length(av_bw), function(i) {
+   pp<- import.bw(av_bw_path[i],
+                                   as="GRanges") 
+})
+
+
+  dtrack_list_p1= DataTrack(granges_list[[1]], chromosome = "chr6", ylim = c(0,500), name = sample_names[1],fill.mountain = c("steelblue","steelblue"))
+
+
+
+
+  dtrack_list_p5= DataTrack(granges_list[[2]], chromosome = "chr6", ylim = c(0,500), name = sample_names[2],fill.mountain = c("darkorange","darkorange"))
+
+gtrack = GenomeAxisTrack()
+itrack <- IdeogramTrack(genome = "mm10", chromosome = "chr6")
+
+
+gg = GeneRegionTrack(txdb, chromosome = "chr6", start=135360000,end=135390000, name = "Emp1")
+                   #  transcriptAnnotation = "Gene")
+
+
+emp1_as_tar_mapk = emp1_smoc2%>%
+  dplyr::filter(Symbol == "Emp1")%>%
+  dplyr::arrange(desc(motif_cat))%>%
+  dplyr::select(motif, motif_dir, motif_cat, chrom, pStart, pEnd, Symbol)%>%
+  unique()%>%
+  dplyr::filter(motif_cat == "bZIP")%>%
+  dplyr::arrange(pStart)%>%
+  dplyr::group_by(pStart, pEnd)%>%
+  dplyr::summarise(all_motif = paste(motif, collapse = "_"))%>%
+  as.data.frame()
+
+
+
+ht <- HighlightTrack(trackList = c(list(gtrack,dtrack_list_p1, dtrack_list_p5,gg)),
+                     start = emp1_as_tar_mapk$pStart, width = 401, 
+                     chromosome = 6)
+
+
+
+
+plotTracks(list(itrack,ht), 
+           from=135360000,to=135385000, 
+           chromosome="chr6",type="polygon",
+         fontcolor.feature = "black")
+
+
+
+```
+
+
+###### note: bigwig files are too big. Please download from GEO site of this paper. The dir in the code above won't work for you if you don't change the dir to the correct one. 
+
+### Smoc2
+
+```{r}
+
+
+  dtrack_list_p1= DataTrack(granges_list[[1]], chromosome = "chr17", col = "black", fill.mountain = c("steelblue","steelblue"),  ylim = c(0,100), name = sample_names[1])
+
+
+
+dtrack_list_p5 = DataTrack(granges_list[[2]], chromosome = "chr17", col = "black", fill.mountain = c("darkorange","darkorange"), ylim = c(0,100), name = sample_names[2])
+
+
+gtrack = GenomeAxisTrack()
+itrack <- IdeogramTrack(genome = "mm10", chromosome = "chr17")
+
+
+
+
+gg = GeneRegionTrack(txdb, chromosome = "chr17", start=14240000,end=14410000, name = "Smoc2")
+
+
+smoc2_as_tar_lef = emp1_smoc2%>%
+  dplyr::filter(Symbol == "Smoc2")%>%
+  dplyr::arrange(desc(motif_cat))%>%
+  dplyr::select(motif, motif_dir, motif_cat, chrom, pStart, pEnd, Symbol)%>%
+  unique()%>%
+  dplyr::filter(motif_cat == "HMG",pStart >= 14249904)%>%
+  dplyr::arrange(pStart)%>%
+  dplyr::group_by(pStart, pEnd)%>%
+  dplyr::summarise(all_motif = paste(motif, collapse = "_"))%>%
+  as.data.frame()%>%
+  dplyr::filter(grepl("Sox", all_motif)== F) # Mel suggested to remove Sox related regions 
+
+
+ht <- HighlightTrack(trackList = c(list(gtrack,dtrack_list_p1, dtrack_list_p5,gg)),
+                     start = smoc2_as_tar_lef$pStart, width = 401, 
+                     chromosome = 17)
+
+
+plotTracks(list(itrack,ht), 
+           from=14240000,to=14410000, 
+           chromosome="chr17",type="polygon",
+         fontcolor.feature = "black")
+
+```
+
+#### Zoomed in to the TSS side of Smoc2
+
+
+```{r}
+
+
+  dtrack_list_p1= DataTrack(granges_list[[1]], chromosome = "chr17", col = "black", fill.mountain = c("steelblue","steelblue"),  ylim = c(0,100), name = sample_names[1])
+
+
+dtrack_list_p5 = DataTrack(granges_list[[2]], chromosome = "chr17", col = "black", fill.mountain = c("darkorange","darkorange"), ylim = c(0,100), name = sample_names[2])
+
+
+gtrack = GenomeAxisTrack()
+itrack <- IdeogramTrack(genome = "mm10", chromosome = "chr17")
+
+
+
+
+gg = GeneRegionTrack(txdb, chromosome = "chr17", start=14240000,end=14290000, name = "Smoc2")
+
+
+smoc2_as_tar_lef = emp1_smoc2%>%
+  dplyr::filter(Symbol == "Smoc2")%>%
+  dplyr::arrange(desc(motif_cat))%>%
+  dplyr::select(motif, motif_dir, motif_cat, chrom, pStart, pEnd, Symbol)%>%
+  unique()%>%
+  dplyr::filter(motif_cat == "HMG",pStart >= 14249904)%>%
+  dplyr::arrange(pStart)%>%
+  dplyr::group_by(pStart, pEnd)%>%
+  dplyr::summarise(all_motif = paste(motif, collapse = "_"))%>%
+  as.data.frame()%>%
+  dplyr::filter(grepl("Sox", all_motif)== F) # Mel suggested to remove Sox related regions 
+
+
+ht <- HighlightTrack(trackList = c(list(gtrack,dtrack_list_p1, dtrack_list_p5,gg)),
+                     start = smoc2_as_tar_lef$pStart, width = 401, 
+                     chromosome = 17)
+
+plotTracks(list(itrack,ht), 
+           from=14240000,to=14290000, 
+           chromosome="chr17",type="polygon",
+         fontcolor.feature = "black")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

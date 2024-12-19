@@ -1,0 +1,326 @@
+---
+title: "RNA_P5P1_kras_inhibit_PCA"
+output: html_document
+date: "2024-12-19"
+---
+
+make PCA 
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(enrichplot)
+library(clusterProfiler)
+library(msigdbr)
+library(stringr)
+library(scales)
+
+plot_pca = function(ori_data, tag, type_annot,
+                    col_code)
+{
+
+
+df = ori_data%>%
+  na.omit()
+df_mat = as.matrix(df)
+
+
+
+pc = prcomp(t(df_mat))
+pc_v = pc$sdev/sum(pc$sdev)*100
+pc_v = round(pc_v, 2)
+
+pc_df = data.frame(sample = colnames(df), 
+                   type = type_annot,
+                   PC1 = pc$x[,1], PC2 = pc$x[,2], stringsAsFactors = F)
+
+  
+  mark_t = as.data.frame(table(pc_df$type))%>%
+    dplyr::left_join(col_code, by = c("Var1" = "type"))%>%
+    dplyr::arrange(Var1)
+  
+  
+  wid = max(pc_df$PC1) - min(pc_df$PC1)
+  hei = max(pc_df$PC2) - min(pc_df$PC2)
+
+  
+  p = ggplot(pc_df, aes(PC1,PC2))+
+    geom_point(aes(color = type),
+                size = 3) +
+    scale_colour_manual(values=mark_t$color, name = "", labels = mark_t$Var1)+
+
+    theme_bw()+
+    theme(text = element_text(size=10)) +
+    coord_fixed(ratio = wid/hei)+
+    ggtitle(tag)+
+    labs(x= paste0("PC1 ", pc_v[1], "%"),
+         y = paste0("PC2 ", pc_v[2], "%"))
+  
+  return(p)
+  
+}
+
+
+
+
+```
+
+
+```{r}
+combat_lcpm= readRDS("data/combined_RNA/kras_P1_P5_combat.rds")
+
+
+
+```
+
+### PCA of combined data 
+
+```{r}
+
+
+combine_col  = data.frame(type = c("vehicle","MRTX1133_3d","MRTX1133_14d","P1", "P5"),
+                         color = c("black","darkorange", "steelblue", "darkgreen", "grey42"),
+                         stringsAsFactors = F)
+    combine_tag = "Kras inhibition combined with P1/P5 using Combat"
+    combine_annot =  c(rep("vehicle",4),
+           rep("MRTX1133_3d", 4),
+           rep("MRTX1133_14d", 4),
+           rep("P1", 4),
+           rep("P5",3))
+    
+    
+    combine_kras = plot_pca(ori_data = combat_lcpm, 
+                      tag = combine_tag, 
+                      type_annot = combine_annot, 
+                      col_code = combine_col)
+    
+    
+combine_kras
+
+    
+```
+
+
+
+### Driving genes in the first two PCs
+
+```{r}
+
+ensg_symbol = readRDS("/gstore/project/crc_metastasis/gitCode/data/combined_RNA/ensg_symbol.Rds")
+
+
+ori_data = combat_lcpm
+df = ori_data%>%
+  na.omit()
+df_mat = as.matrix(df)
+
+
+
+pc = prcomp(t(df_mat))
+pc_v = pc$sdev/sum(pc$sdev)*100
+pc_v = round(pc_v, 2)
+
+### which genes have highest weights on PC1 and PC2?
+pc_w_df = data.frame(ID = rownames(pc$rotation), 
+                    pc1 = pc$rotation[,1],
+                    pc2 = pc$rotation[,2],
+                    stringsAsFactors = F)%>%
+  dplyr::left_join(ensg_symbol, by = "ID")%>%
+  dplyr::select(-ID)%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::summarise_if(is.numeric, mean, na.rm = T)%>%
+  dplyr::ungroup()%>%
+  as.data.frame()
+
+
+
+m_t2g <- msigdbr(species = "Mus musculus", category = "C2") %>% 
+  dplyr::select(gs_name, gene_symbol)
+
+
+wp_path = m_t2g%>%
+  dplyr::filter(grepl("WP_", gs_name))
+
+
+geneList1 =pc_w_df$pc1
+names(geneList1) = pc_w_df$symbol
+
+geneList1 = sort(geneList1, decreasing = T)
+
+
+set.seed(123)
+gsea1_wp<-GSEA(geneList1, TERM2GENE = wp_path, pvalueCutoff = 0.05,
+               seed = T)
+
+
+fdf1 = gsea1_wp@result%>%
+    as.data.frame()%>%
+  dplyr::filter(grepl("CANCER", ID) == F)%>%
+    dplyr::filter(grepl("CARCINOMA", ID) == F)%>%
+      dplyr::filter(grepl("DISEASE", ID) == F)%>%
+      dplyr::filter(grepl("INFECTION", ID) == F)%>%
+    dplyr::filter(abs(NES)>1 & pvalue < 0.01)%>%
+    dplyr::filter(setSize >= 20)%>%
+    dplyr::arrange(desc(NES))%>%
+    dplyr::mutate(sig = -log10(pvalue))%>%
+    dplyr::mutate(simp_name = gsub("Wp_","",str_to_title(ID)))%>%
+    dplyr::mutate(regulation = case_when(NES < 0 ~ "down", 
+                                       NES > 0 ~ "up"))
+
+
+#####
+
+
+geneList2 =pc_w_df$pc2
+names(geneList2) = pc_w_df$symbol
+
+geneList2 = sort(geneList2, decreasing = T)
+
+set.seed(123)
+gsea2_wp<-GSEA(geneList2, TERM2GENE = wp_path, pvalueCutoff = 0.05,
+               seed = T)
+
+
+fdf2 = gsea2_wp@result%>%
+    as.data.frame()%>%
+  dplyr::filter(grepl("CANCER", ID) == F)%>%
+    dplyr::filter(grepl("CARCINOMA", ID) == F)%>%
+      dplyr::filter(grepl("DISEASE", ID) == F)%>%
+      dplyr::filter(grepl("INFECTION", ID) == F)%>%
+    dplyr::filter(abs(NES)>1 & pvalue < 0.01)%>%
+    dplyr::filter(setSize >= 20)%>%
+    dplyr::arrange(desc(NES))%>%
+    dplyr::mutate(sig = -log10(pvalue))%>%
+    dplyr::mutate(simp_name = gsub("Wp_","",str_to_title(ID)))%>%
+    dplyr::mutate(regulation = case_when(NES < 0 ~ "down", 
+                                       NES > 0 ~ "up"))
+
+
+
+
+
+```
+
+visualize those results 
+
+```{r, fig.width=10}
+
+
+
+
+b_fil1 = ggplot(fdf1, aes(x = reorder(simp_name, NES),  y = NES, 
+                                 color = regulation, 
+                                 fill = sign(NES)*(-log10(p.adjust))))+
+  geom_bar(stat = "identity")+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red")+
+  scale_color_manual(values = c("blue","red"))+
+ # geom_text(aes(label = scales::scientific(FDR)), vjust = 1, size = 2) +  # Adjust vjust and size as needed
+  
+  coord_flip()+
+  theme(axis.text.y = element_text(size = 10))+
+  labs(x = NULL)+
+  theme_bw()
+
+
+b_fil1
+
+```
+
+
+
+```{r, fig.width=10}
+
+
+b_fil2 = ggplot(fdf2, aes(x = reorder(simp_name, NES),  y = NES, 
+                                 color = regulation, 
+                                 fill = sign(NES)*(-log10(p.adjust))))+
+  geom_bar(stat = "identity")+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red")+
+  scale_color_manual(values = c("blue","red"))+
+ # geom_text(aes(label = scales::scientific(FDR)), vjust = 1, size = 2) +  # Adjust vjust and size as needed
+  coord_flip()+
+  theme(axis.text.y = element_text(size = 10))+
+  labs(x = NULL)+
+  theme_bw()
+b_fil2
+
+```
+
+
+### Focused genesets 
+
+```{r, fig.width=10}
+
+fdf1_fil = fdf1%>%
+  dplyr::filter(simp_name %in% c("type_ii_interferon_signaling_ifng",
+                                 "allograft_rejection",
+                                 "wnt_signaling_pathway_and_pluripotency",
+                                 "embryonic_stem_cell_pluripotency_pathways",
+                                 "wnt_signaling",
+                                 "dna_replication",
+                                 "dna_mismatch_repair",
+                                 "cell_cycle"))
+
+b_fil1_fil = ggplot(fdf1_fil, aes(x = reorder(simp_name, NES),  y = NES, 
+                                 color = regulation, 
+                                 fill = sign(NES)*(-log10(p.adjust))))+
+  geom_bar(stat = "identity")+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red")+
+  scale_color_manual(values = c("blue","red"))+
+  coord_flip()+
+  theme(axis.text.y = element_text(size = 10))+
+  labs(x = NULL)+
+  theme_bw()
+
+
+b_fil1_fil
+
+```
+
+```{r, fig.width=10}
+
+fdf2_fil = fdf2%>%
+  dplyr::filter(simp_name %in% c( "glycolysis_and_gluconeogenesis",
+                                  "prostaglandin_signaling",
+                                  "tgfbeta_receptor_signaling",
+                                   "erbb_signaling_pathway",
+                                  "vegfavegfr2_signaling_pathway",
+                                  "egfegfr_signaling_pathway",
+                                   "vitamin_a_and_carotenoid_metabolism",
+                                  "eicosanoid_metabolism_via_cyclooxygenases_cox",
+                                  "prostaglandin_and_leukotriene_metabolism_in_senescence",
+                                  "mitochondrial_complex_i_assembly_model_oxphos_system"))
+
+b_fil2_fil = ggplot(fdf2_fil, aes(x = reorder(simp_name, NES),  y = NES, 
+                                 color = regulation, 
+                                 fill = sign(NES)*(-log10(p.adjust))))+
+  geom_bar(stat = "identity")+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red")+
+  scale_color_manual(values = c("blue","red"))+
+  coord_flip()+
+  theme(axis.text.y = element_text(size = 10))+
+  labs(x = NULL)+
+  theme_bw()
+
+
+b_fil2_fil
+```
+
+
+
+

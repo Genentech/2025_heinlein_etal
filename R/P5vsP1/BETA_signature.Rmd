@@ -1,0 +1,229 @@
+---
+title: "BETA_signatures"
+output: html_document
+date: "2024-12-19"
+---
+
+Identify key targets by MAPK TFs and Wnt TFs using the motif specific BETA results.
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(igis) # gRED internal 
+library(matrixStats)
+library(biomaRt)
+
+
+
+```
+
+
+
+
+
+```{r}
+
+get_edge = fread("data/P5vsP1/all_edge.tsv",
+            stringsAsFactors = F)
+
+resp51 = readRDS("data/P5vsP1/res_P5_P1.rds")
+
+```
+
+
+```{r}
+
+sel_edge = get_edge%>%
+  dplyr::filter(motif %in% c("BATF", "Atf3", "Fra1", "Fos", "JunB", "AP-1","LEF1", "Tcf3", "Tcf7", "TCFL2","Atf7","CREB5","Atf1","Atf2","Bach2"))%>%
+  dplyr::mutate(motifDir = case_when(motif_dir == "down" ~ paste0(motif, "_d"),
+                                      motif_dir == "up" ~ paste0(motif, "_u")))
+
+
+clean_sel_edge = sel_edge%>%
+  dplyr::select(motif,motif_dir, motif_cat, GeneSymbol, edge_v)%>%
+  dplyr::group_by(motif, motif_dir, motif_cat, GeneSymbol)%>%
+  dplyr::summarise(edge_v = mean(edge_v))%>%
+  dplyr::ungroup()%>%
+  dplyr::mutate(abs_edge_v = abs(edge_v))%>%
+  dplyr::mutate(motif = toupper(motif))
+
+
+#### remember that the above is P1 vs P5
+
+gene_list = resp51%>%
+  dplyr::filter(symbol %in% clean_sel_edge$GeneSymbol)%>%
+  dplyr::select(symbol, LogFC, FDR)%>%
+  dplyr::mutate(stat = LogFC * -log10(FDR))%>%
+  dplyr::rename(ID = symbol)%>%
+  dplyr::select(-LogFC)%>%
+  dplyr::select(-FDR)%>%
+  dplyr::mutate(type = "target")%>%
+  dplyr::mutate(dir = "none")%>%
+  dplyr::mutate(motif_cat = "none")
+
+
+```
+
+
+### Look for genes under each regulation category 
+
+```{r}
+
+down_gene = gene_list%>%
+  dplyr::filter(stat < -0)
+
+
+
+wnt_all = clean_sel_edge%>%
+      dplyr::filter(GeneSymbol %in% down_gene$ID)%>%
+  dplyr::filter( motif %in% c("LEF1", "TCF3", "TCF7", "TCFL2"))
+  #dplyr::filter(abs_edge_v >= -log10(0.001))
+
+p1_wnt_all= unique(wnt_all$GeneSymbol)
+
+
+mapk1_all = clean_sel_edge%>%
+      dplyr::filter(GeneSymbol %in% down_gene$ID)%>%
+  dplyr::filter( motif %in% c("BATF", "ATF3", "FRA1", "FOS", "JUNB", "AP-1"))
+  #dplyr::filter(abs_edge_v >= -log10(0.001))
+
+p1_mapk1_all= unique(mapk1_all$GeneSymbol)
+
+
+
+
+mapk2_all = clean_sel_edge%>%
+      dplyr::filter(GeneSymbol %in% down_gene$ID)%>%
+  dplyr::filter( motif %in% c("ATF1", "ATF2", "ATF7", "CREB5"))
+ # dplyr::filter(abs_edge_v >= -log10(0.001))
+
+p1_mapk2_all= unique(mapk2_all$GeneSymbol)
+
+
+
+
+wnt_sig = clean_sel_edge%>%
+      dplyr::filter(GeneSymbol %in% down_gene$ID)%>%
+  dplyr::filter( motif %in% c("LEF1", "TCF3", "TCF7", "TCFL2"))%>%
+  dplyr::filter(abs_edge_v >= -log10(0.0001))
+
+p1_wnt_sig= unique(wnt_sig$GeneSymbol)
+
+
+mapk1_sig = clean_sel_edge%>%
+      dplyr::filter(GeneSymbol %in% down_gene$ID)%>%
+  dplyr::filter( motif %in% c("BATF", "ATF3", "FRA1", "FOS", "JUNB", "AP-1"))%>%
+  dplyr::filter(abs_edge_v >= -log10(0.0001))
+
+p1_mapk1_sig= unique(mapk1_sig$GeneSymbol)
+
+
+
+
+mapk2_sig = clean_sel_edge%>%
+      dplyr::filter(GeneSymbol %in% down_gene$ID)%>%
+  dplyr::filter( motif %in% c("ATF1", "ATF2", "ATF7", "CREB5"))%>%
+  dplyr::filter(abs_edge_v >= -log10(0.0001))
+
+p1_mapk2_sig= unique(mapk2_sig$GeneSymbol)
+
+
+p1_only_wnt = intersect(setdiff(p1_wnt_all, union(p1_mapk1_all, p1_mapk2_all)), p1_wnt_sig)
+p1_wnt_mapk1 = intersect(intersect(setdiff(p1_wnt_all, p1_mapk2_all), p1_wnt_sig), p1_mapk1_sig)
+p1_wnt_mapk2 = intersect(intersect(setdiff(p1_wnt_all, p1_mapk1_all), p1_wnt_sig), p1_mapk2_sig)
+p1_only_mapk1 =  intersect(setdiff(p1_mapk1_all, union(p1_wnt_all, p1_mapk2_all)), p1_mapk1_sig)
+p1_only_mapk2 =  intersect(setdiff(p1_mapk2_all, union(p1_wnt_all, p1_mapk1_all)), p1_mapk2_sig)
+p1_wnt_mapk1_mapk2 = intersect(intersect(p1_mapk1_sig, p1_wnt_sig), p1_mapk2_sig)
+p1_mapk1_mapk2 = intersect(intersect(setdiff(p1_mapk1_all, p1_wnt_all), p1_mapk1_sig), p1_mapk2_sig)
+
+
+up_gene = gene_list%>%
+  dplyr::filter(stat >0)
+
+p5_sig = clean_sel_edge%>%
+  dplyr::filter(GeneSymbol %in% up_gene$ID)%>%
+  dplyr::filter(abs_edge_v >= -log10(0.0001))
+
+p5_mapk1 = unique(p5_sig$GeneSymbol)
+
+
+res_df = data.frame(set = c(rep("p5_mapk1", length(p5_mapk1)), 
+                            rep("p1_only_wnt", length(p1_only_wnt)), 
+                            rep("p1_only_mapk1", length(p1_only_mapk1)), 
+                            rep("p1_only_mapk2", length(p1_only_mapk2)),
+                            rep("p1_wnt_mapk1", length(p1_wnt_mapk1)),
+                            rep("p1_wnt_mapk2", length(p1_wnt_mapk2)),
+                            rep("p1_wnt_mapk1_mapk2", length(p1_wnt_mapk1_mapk2)),
+                            rep("p1_mapk1_mapk2", length(p1_mapk1_mapk2))), 
+                    gene = c(p5_mapk1, p1_only_wnt, p1_only_mapk1, p1_only_mapk2, p1_wnt_mapk1, p1_wnt_mapk2,p1_wnt_mapk1_mapk2, p1_mapk1_mapk2),
+                    stringsAsFactors = F)%>%
+  dplyr::left_join(resp51, by = c("gene" = "symbol"))%>%
+  dplyr::select(set, gene)
+
+
+write.table(res_df, "data/P5vsP1/BETA_signature.tsv", 
+            quote = F, row.names = F, sep = "\t")
+
+```
+
+
+
+#### merge the P1 signatures 
+
+
+```{r}
+
+
+res_merge_wnt  = res_df%>%
+  dplyr::filter(grepl("wnt", set))
+
+res_p5_mapk = res_df%>%
+  dplyr::filter(set == "p5_mapk1")
+
+res_merge_df = data.frame(set =c(rep("p5_mapk", length(res_p5_mapk$gene)), 
+                                 rep("p1_wnt", length(res_merge_wnt$gene))),
+                          gene = c(res_p5_mapk$gene, res_merge_wnt$gene),
+                          stringsAsFactors = F)
+write.table(res_merge_df, "data/P5vsP1/BETA_signature_merge.tsv", sep = "\t", row.names = F, quote= F)
+
+
+ig.mm <- Igis(species = "mouse", version = "4.0")
+ig.mm.gt <- data.frame(genes(ig.mm))
+ig.hg <- Igis(species = "human", version = "4.0")
+ig.hg.gt <- data.frame(genes(ig.hg))
+
+
+p5_mapk_mm = genesBySymbol(symbols = res_p5_mapk$gene, igis = ig.mm)
+p5_mapk_mm.orth = orthologs(geneIds = p5_mapk_mm$GeneID, toSpecies = "human", igis = ig.mm)
+p5_mapk_hg.orth = genesById(geneIds = p5_mapk_mm.orth$hsapiens_homolog_ensembl_gene, igis = ig.hg)
+
+
+
+p1_wnt_mm = genesBySymbol(symbols = res_merge_wnt$gene, igis = ig.mm)
+p1_wnt_mm.orth = orthologs(geneIds = p1_wnt_mm$GeneID, toSpecies = "human", igis = ig.mm)
+p1_wnt_hg.orth = genesById(geneIds = p1_wnt_mm.orth$hsapiens_homolog_ensembl_gene, igis = ig.hg)
+
+
+hg_res_merge_df = data.frame(set =c(rep("p5_mapk", length(p5_mapk_hg.orth$Symbol)), 
+                                 rep("p1_wnt", length(p1_wnt_hg.orth$Symbol))),
+                          gene = c(p5_mapk_hg.orth$Symbol, p1_wnt_hg.orth$Symbol),
+                          stringsAsFactors = F)
+
+write.table(hg_res_merge_df, "data/P5vsP1/BETA_signature_merge_human.tsv", sep = "\t", row.names = F, quote= F)
+
+```
+
+

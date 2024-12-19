@@ -1,0 +1,333 @@
+---
+title: "BETA_signature_kras_inhibit_heatmap_gsea"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(readxl)
+library(circlize)
+library(ComplexHeatmap)
+library(matrixStats)
+library(biomaRt)
+library(clusterProfiler)
+library(enrichplot)
+
+
+
+square_cal = function(n)
+{
+  if(n > 10)
+  {
+      c = ceiling(log10(n))
+  p = n/(10**c)
+  }else{
+      c = ceiling(log10(n))
+  p = n/(100**c)
+  
+  }
+
+  if(n == 1)
+  {
+    p = 0.01
+  }
+  
+  return(p)
+  
+}
+
+
+
+h3_heatmap = function(mlist )
+{
+  
+#mlist = feature_df$gene[which(feature_df$set == "p5_mapk")]
+#mlist = feature_df$gene[which(feature_df$set == "p1_wnt")]
+  
+sel_expr = data.frame(symbol = mlist,  stringsAsFactors = F) %>%
+  dplyr::left_join(expr, by = "symbol")%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::mutate(n = row_number())%>%
+  dplyr::mutate(symbol = case_when(n !=1 ~ paste0(symbol, ".", n), 
+                                   T ~ symbol))%>%
+  as.data.frame()%>%
+  na.omit()
+  
+
+expr_mat = as.matrix(sel_expr[, c(3:14)])
+colnames(expr_mat) = colnames(sel_expr)[3:14]
+rownames(expr_mat) = sel_expr$symbol
+
+
+
+r_m = rowMeans(expr_mat)
+r_sd = rowSds(expr_mat)
+stan_expr = sweep(expr_mat, 1, r_m)
+stan_expr = sweep(stan_expr, 1, r_sd, FUN = "/")
+
+col_fun_expr = colorRamp2(c(-2, 0, 2), c("blue","white", "red"))
+
+ta = HeatmapAnnotation(group =c(rep("veh",4), rep("3d",4), rep("14d",4)),
+                       col = list(group = c("veh" = "black", "3d"= "darkorange", "14d" = "steelblue")))
+
+hei = unit(square_cal(nrow(stan_expr))*20, "cm")
+
+h1 = Heatmap(as.matrix(stan_expr),
+             name = "standardized expression",
+        col = col_fun_expr,
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 5),
+        column_names_gp = gpar(fontsize = 4),
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        width = hei*(ncol(stan_expr)/nrow(stan_expr)),
+        height =  hei,
+        #left_annotation = la, 
+       top_annotation = ta, 
+        cluster_rows = T, cluster_columns = F,
+        column_split = factor(c(rep("veh",4), rep("3d",4),     rep("14d",4)), levels = c("veh","3d","14d")),
+       column_title_gp = gpar(fontsize = 6))
+
+
+
+res3d_vehicle = readRDS("data/KrasInhibition/inhibit3d_veh_res.rds")
+res14d_vehicle = readRDS("data/KrasInhibition/inhibit14d_veh_res.rds")
+
+
+lf_df_3d = rbindlist(lapply(1:nrow(stan_expr), function(x) {
+  this_gene = rownames(stan_expr)[x]
+     g3d_vehicle = res3d_vehicle%>%
+          dplyr::filter(symbol == this_gene)
+
+    
+  df = data.frame(gene = this_gene,
+                lf_3d_vehicle = NA, 
+                fdr_3d_vehicle = NA, 
+                 sig_3d_vehicle = "",
+                  stringsAsFactors = F)
+ 
+  if(nrow(g3d_vehicle) >0)
+  {
+        df$lf_3d_vehicle = g3d_vehicle$LogFC[1]
+        df$fdr_3d_vehicle =  g3d_vehicle$FDR[1]
+             if(g3d_vehicle$FDR[1] <= 0.05)
+          df$sig_3d_vehicle = "*"
+
+  }
+  
+  return(df)
+  
+}))
+
+
+
+
+
+lf_df_14d = rbindlist(lapply(1:nrow(stan_expr), function(x) {
+  this_gene = rownames(stan_expr)[x]
+     g14d_vehicle = res14d_vehicle%>%
+          dplyr::filter(symbol == this_gene)
+
+    
+  df = data.frame(gene = this_gene,
+                lf_14d_vehicle = NA, 
+                fdr_14d_vehicle = NA, 
+                 sig_14d_vehicle = "",
+                  stringsAsFactors = F)
+ 
+  if(nrow(g14d_vehicle) >0)
+  {
+        df$lf_14d_vehicle = g14d_vehicle$LogFC[1]
+        df$fdr_14d_vehicle =  g14d_vehicle$FDR[1]
+             if(g14d_vehicle$FDR[1] <= 0.05)
+          df$sig_14d_vehicle = "*"
+
+  }
+  
+  return(df)
+  
+}))
+
+
+
+sig_mat_3d = as.matrix(lf_df_3d[,4])
+lf_mat_3d = as.matrix(lf_df_3d[,2])
+colnames(lf_mat_3d) ="3dvsVehicle"
+rownames(lf_mat_3d) = lf_df_3d$gene
+
+
+sig_mat_14d = as.matrix(lf_df_14d[,4])
+lf_mat_14d = as.matrix(lf_df_14d[,2])
+colnames(lf_mat_14d) ="14dvsVehicle"
+rownames(lf_mat_14d) = lf_df_14d$gene
+
+
+
+
+col_fun = colorRamp2(c(-2, 0,2), c("blue", "white", "red"))
+
+
+h2 = Heatmap(as.matrix(lf_mat_3d),
+             name = "Log2 FC",
+             col = col_fun,
+             width = unit(square_cal(nrow(lf_mat_3d))/nrow(lf_mat_3d)*20, "cm"), 
+             show_row_names = F,
+             height = hei,
+             column_names_gp = gpar(fontsize = 7),
+         cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%s", sig_mat_3d[i, j]), x, y, gp = gpar(fontsize = 8))
+},
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        cluster_rows = F, cluster_columns = F)
+
+
+h3 = Heatmap(as.matrix(lf_mat_14d),
+             name = "Log2 FC",
+        col = col_fun,
+         width = unit(square_cal(nrow(lf_mat_14d))/nrow(lf_mat_14d)*20, "cm"), 
+             show_row_names = F,
+             height = hei,
+        column_names_gp = gpar(fontsize = 7),
+         cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%s", sig_mat_14d[i, j]), x, y, gp = gpar(fontsize = 8))
+},
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        cluster_rows = F, cluster_columns = F)
+
+
+ return(h1+h2+h3)
+
+
+}
+
+
+
+```
+
+
+
+
+
+
+```{r}
+
+de_3dveh = readRDS("data/KrasInhibition/inhibit3d_veh_res.rds")
+de_14dveh = readRDS("data/KrasInhibition/inhibit14d_veh_res.rds")
+
+
+feature_df = fread("data/P5vsP1/BETA_signature_merge.tsv", 
+                   stringsAsFactors = F)
+
+expr = fread("data/KrasInhibition/filter_lcpm_expression.tsv", 
+            stringsAsFactors = F, data.table = F)
+
+
+
+```
+
+
+
+### GSEA
+
+```{r}
+
+
+res_df_3_av = de_3dveh%>%
+  dplyr::select(symbol, t)%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::summarise(t = mean(t))
+
+geneList = res_df_3_av$t
+names(geneList) = res_df_3_av$symbol
+geneList = sort(geneList, decreasing = T)
+
+
+
+set.seed(47382686)
+y <- GSEA(geneList, TERM2GENE = feature_df, pvalueCutoff = 1, minGSSize = 5, maxGSSize = 700)
+
+nes = paste(paste0(y@result$Description, ":", round(y@result$NES,2)), collapse = "; ")
+
+ gseaplot2(y, geneSetID = c(1:2),pvalue_table = T, color = c("#1f78b4","#fb9a99"),
+           title = paste0("3d NES ",nes))
+ 
+ 
+```
+
+
+
+
+```{r}
+
+res_df_14_av = de_14dveh%>%
+  dplyr::select(symbol, t)%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::summarise(t = mean(t))
+
+geneList = res_df_14_av$t
+names(geneList) = res_df_14_av$symbol
+geneList = sort(geneList, decreasing = T)
+
+
+
+set.seed(47382686)
+y_14 <- GSEA(geneList, TERM2GENE = feature_df, pvalueCutoff = 1, minGSSize = 5, maxGSSize = 700)
+
+
+nes = paste(paste0(y_14@result$Description, ":", round(y_14@result$NES,2)), collapse = "; ")
+gseaplot2(y_14, geneSetID = c(1:2),pvalue_table = T, color = c("#1f78b4","#fb9a99"),
+           title = paste0("14d NES ",nes))
+ 
+
+
+```
+
+
+### heatmaps 
+
+#### P5 MAPK
+
+```{r, fig.height=12}
+
+
+
+p5_mapk_h = h3_heatmap(mlist = feature_df$gene[which(feature_df$set == "p5_mapk")])
+
+p5_mapk_h
+
+```
+
+
+#### P1 Wnt
+
+```{r}
+
+p1_wnt_h = h3_heatmap(mlist = feature_df$gene[which(feature_df$set == "p1_wnt")])
+
+p1_wnt_h
+
+
+
+```
+
+
+
+
+
+
+

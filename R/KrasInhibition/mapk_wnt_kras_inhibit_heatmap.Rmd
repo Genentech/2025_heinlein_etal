@@ -1,0 +1,246 @@
+---
+title: "RNA_kras_inhibit_mapk_wnt_heatmap_20241017"
+output: html_document
+date: "2024-12-19"
+---
+
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(readxl)
+library(circlize)
+library(ComplexHeatmap)
+library(matrixStats)
+library(biomaRt)
+
+
+
+
+square_cal = function(n)
+{
+  if(n > 1)
+  {
+      c = ceiling(log10(n))
+  p = n/(10**c)
+  }else{
+    p = 0.1
+  }
+
+  
+  
+  return(p)
+  
+}
+
+```
+
+
+
+
+```{r}
+
+mlist = c("Spred1","Spred2", "Ets","Spry2", "Spry4", "Etv1", "Etv4", "Etv6", "Dusp4","Dusp6")
+wlist = c("Lgr5", "Axin2", "Ascl2", "Slc12a2", "Gkn33p", "Nkd1", "Wif1", "Smoc2")
+
+
+
+expr = fread("data/KrasInhibition/filter_lcpm_expression.tsv", 
+            stringsAsFactors = F, data.table = F)
+
+
+res3d_vehicle = readRDS("data/KrasInhibition/inhibit3d_veh_res.rds")
+res14d_vehicle = readRDS("data/KrasInhibition/inhibit14d_veh_res.rds")
+
+
+```
+
+
+
+
+
+
+```{r, fig.width=10, fig.height=12}
+
+
+sel_expr = data.frame(symbol = c(mlist, wlist), 
+                      grp = c(rep("MAPK", length(mlist)), rep("WNT", length(wlist))),
+                      stringsAsFactors = F) %>%
+  dplyr::left_join(expr, by = "symbol")%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::mutate(n = row_number())%>%
+  dplyr::mutate(symbol = case_when(n !=1 ~ paste0(symbol, ".", n), 
+                                   T ~ symbol))%>%
+  as.data.frame()%>%
+  na.omit()
+  
+row_groups = factor(sel_expr$grp, levels = c("MAPK","WNT"))
+
+expr_mat = as.matrix(sel_expr[, c(4:15)])
+colnames(expr_mat) = colnames(sel_expr)[4:15]
+rownames(expr_mat) = sel_expr$symbol
+
+
+
+
+r_m = rowMeans(expr_mat)
+r_sd = rowSds(expr_mat)
+stan_expr = sweep(expr_mat, 1, r_m)
+stan_expr = sweep(stan_expr, 1, r_sd, FUN = "/")
+
+col_fun_expr = colorRamp2(c(-2, 0, 2), c("blue","white", "red"))
+
+
+ta = HeatmapAnnotation(group =c(rep("vehicle",4), rep("MRTX1133_3d",4), rep("MRTX1133_14d",4)),
+                       col = list(group = c("vehicle" = "black", "MRTX1133_3d"= "darkorange", "MRTX1133_14d" = "steelblue")))
+
+
+hei = unit(square_cal(nrow(stan_expr))*50, "cm")
+
+
+h1 = Heatmap(as.matrix(stan_expr),
+             name = "standardized expression",
+        col = col_fun_expr,
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        column_names_gp = gpar(fontsize = 4),
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        width = unit(square_cal(ncol(stan_expr))*50, "cm"), 
+        height =  hei,
+        top_annotation = ta, 
+        cluster_rows = T,
+        row_split = row_groups, 
+        cluster_columns = F,
+        column_split = factor(c(rep("vehicle",4), rep("MRTX1133_3d",4),     rep("MRTX1133_14d",4)),      
+                              levels = c("vehicle","MRTX1133_3d","MRTX1133_14d")), 
+       column_title_gp = gpar(fontsize = 6))
+
+
+
+lf_df_3d = rbindlist(lapply(1:nrow(stan_expr), function(x) {
+  this_gene = rownames(stan_expr)[x]
+     g3d_vehicle = res3d_vehicle%>%
+          dplyr::filter(symbol == this_gene)
+
+    
+  df = data.frame(gene = this_gene,
+                lf_3d_vehicle = NA, 
+                fdr_3d_vehicle = NA, 
+                 sig_3d_vehicle = "",
+                  stringsAsFactors = F)
+ 
+  if(nrow(g3d_vehicle) >0)
+  {
+        df$lf_3d_vehicle = g3d_vehicle$LogFC[1]
+        df$fdr_3d_vehicle =  g3d_vehicle$FDR[1]
+             if(g3d_vehicle$FDR[1] <= 0.05)
+          df$sig_3d_vehicle = "*"
+
+  }
+  
+  return(df)
+  
+}))
+
+
+
+
+
+lf_df_14d = rbindlist(lapply(1:nrow(stan_expr), function(x) {
+  this_gene = rownames(stan_expr)[x]
+     g14d_vehicle = res14d_vehicle%>%
+          dplyr::filter(symbol == this_gene)
+
+    
+  df = data.frame(gene = this_gene,
+                lf_14d_vehicle = NA, 
+                fdr_14d_vehicle = NA, 
+                 sig_14d_vehicle = "",
+                  stringsAsFactors = F)
+ 
+  if(nrow(g14d_vehicle) >0)
+  {
+        df$lf_14d_vehicle = g14d_vehicle$LogFC[1]
+        df$fdr_14d_vehicle =  g14d_vehicle$FDR[1]
+             if(g14d_vehicle$FDR[1] <= 0.05)
+          df$sig_14d_vehicle = "*"
+
+  }
+  
+  return(df)
+  
+}))
+
+
+
+sig_mat_3d = as.matrix(lf_df_3d[,4])
+lf_mat_3d = as.matrix(lf_df_3d[,2])
+colnames(lf_mat_3d) ="3dvsVehicle"
+rownames(lf_mat_3d) = lf_df_3d$gene
+
+
+sig_mat_14d = as.matrix(lf_df_14d[,4])
+lf_mat_14d = as.matrix(lf_df_14d[,2])
+colnames(lf_mat_14d) ="14dvsVehicle"
+rownames(lf_mat_14d) = lf_df_14d$gene
+
+
+
+
+col_fun = colorRamp2(c(-2, 0,2), c("blue", "white", "red"))
+
+
+h2 = Heatmap(as.matrix(lf_mat_3d),
+             name = "Log2 FC",
+        col = col_fun,
+        width = unit(square_cal(nrow(lf_mat_3d))/nrow(lf_mat_3d)*50, "cm"), 
+        show_row_names = F,
+        height = hei,
+        column_names_gp = gpar(fontsize = 7),
+        cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%s", sig_mat_3d[i, j]), x, y, gp = gpar(fontsize = 8))
+},
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        cluster_rows = F, 
+        cluster_columns = F)
+
+
+h3 = Heatmap(as.matrix(lf_mat_14d),
+             name = "Log2 FC",
+        col = col_fun,
+        row_names_gp = gpar(fontsize = 10),
+        width = unit(square_cal(nrow(lf_mat_14d))/nrow(lf_mat_14d)*50, "cm"), 
+        show_row_names = F,
+        height = hei,
+        column_names_gp = gpar(fontsize = 7),
+        cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%s", sig_mat_14d[i, j]), x, y, gp = gpar(fontsize = 8))
+},
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        cluster_rows = F, cluster_columns = F)
+
+ h1+h2+h3
+
+```
+
+
+
+
+
+
+
+
