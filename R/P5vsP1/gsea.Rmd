@@ -1,0 +1,107 @@
+---
+title: "P5_P1_gsea"
+output: html_document
+date: "2024-12-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+### Visualize gsea results (wikipath) with barplots
+```{r, fig.width=12, fig.height=8}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(ggrepel)
+library(stringr)
+library(scales)
+gsea_result = readRDS("data/P5vsP1/gsea_result.rds")
+res = gsea_result[[1]]$fgsea
+
+tt = grep("^WP_", res$name)
+
+wp_res = res[tt,]
+
+nes_cutoff = 1
+pval_cutoff = 0.01
+
+fdf = wp_res%>%
+    as.data.frame()%>%
+  dplyr::filter(grepl("CANCER", name) == F)%>%
+    dplyr::filter(grepl("CARCINOMA", name) == F)%>%
+    dplyr::arrange(desc(NES))%>%
+    dplyr::filter(NGenes >=10 & NGenes <= 500)%>%
+    dplyr::arrange(desc(NGenes))%>%
+    dplyr::mutate(sig = -log10(PValue))%>%
+    dplyr::mutate(simp_name = gsub("Wp_","",str_to_title(name)))%>% 
+    dplyr::mutate(mark = case_when(NES> nes_cutoff & PValue < pval_cutoff ~ "up",
+                                   NES < -nes_cutoff & PValue < pval_cutoff ~ "down",
+                                   T ~ "none"))
+  
+
+
+fdf_sel = fdf%>%
+  dplyr::filter(abs(NES)>1 & PValue < 0.01)%>%
+  dplyr::arrange(desc(NES))%>%
+  dplyr::mutate(cm = "other")%>%
+  dplyr::mutate(cm = case_when(grepl("mapk|egfr|erbb", simp_name) ~ "MAPK/EGFR", 
+                               grepl("wnt", simp_name) ~ "WNT",
+                               T ~ cm))%>%
+   dplyr::mutate(regulation = case_when(NES < 0 ~ "down", 
+                                       NES > 0 ~ "up"))
+
+
+
+b= ggplot(fdf_sel, aes(x = reorder(simp_name, NES),  y = NES, 
+                       color = regulation, 
+                       fill = sign(NES)*(-log10(FDR))))+
+  geom_bar(stat = "identity")+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red")+
+  scale_color_manual(values = c("blue","red"))+
+  coord_flip()+
+  theme(axis.text.y = element_text(size = 5))+
+  theme_bw()+
+  labs(x = NULL)
+
+
+b
+```
+
+
+
+#### highly relevant pathways 
+
+
+```{r}
+fdf_sel_fil = fdf_sel%>%
+  dplyr::filter(simp_name %in% c("dna_replication", "cell_cycle", "unfolded_protein_response", 
+                                 "egfegfr_signaling_pathway", "focal_adhesion","mapk_cascade",
+                                 "mapk_signaling_pathway","wnt_signaling","type_ii_interferon_signaling_ifng",
+                                 "oxidative_phosphorylation"))%>%
+  dplyr::mutate(regulation = case_when(NES < 0 ~ "down", 
+                                       NES > 0 ~ "up"))
+
+
+
+b_fil2 = ggplot(fdf_sel_fil, aes(x = reorder(simp_name, NES),  y = NES, 
+                                 color = regulation, 
+                                 fill = sign(NES)*(-log10(FDR))))+
+  geom_bar(stat = "identity")+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red")+
+  scale_color_manual(values = c("blue","red"))+
+  coord_flip()+
+  theme(axis.text.y = element_text(size = 10))+
+  labs(x = NULL)+
+  theme_bw()
+
+
+b_fil2
+```
+

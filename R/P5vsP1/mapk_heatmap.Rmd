@@ -1,0 +1,540 @@
+---
+title: "mapk_heatmap"
+output: html_document
+date: "2024-10-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(readxl)
+library(circlize)
+library(ComplexHeatmap)
+library(igis) # gRED internal 
+library(matrixStats)
+library(biomaRt)
+
+
+
+square_cal = function(n)
+{
+  if(n > 10)
+  {
+      c = ceiling(log10(n))
+  p = n/(10**c)
+  }else{
+      c = ceiling(log10(n))
+  p = n/(100**c)
+  
+  }
+
+  if(n == 1)
+  {
+    p = 0.01
+  }
+  
+  return(p)
+  
+}
+```
+
+
+
+### Heatmap for mapk genes 
+
+```{r}
+### data from https://www.nature.com/articles/s42003-020-01552-6
+
+mapk = read_excel("data/P5vsP1/42003_2020_1552_MOESM4_ESM.xlsx",
+                  sheet = 1)%>%
+  as.data.frame()%>%
+  dplyr::select(Gene, Pathway)%>%
+  unique()%>%
+  dplyr::group_by(Gene)%>%
+  dplyr::summarise(pathway = paste(Pathway, collapse = "_"))
+
+
+```
+
+
+#### mouse ortholog
+
+```{r}
+
+
+
+ig.mm <- Igis(species = "mouse", version = "4.0")
+ig.mm.gt <- data.frame(genes(ig.mm))
+ig.hg <- Igis(species = "human", version = "4.0")
+ig.hg.gt <- data.frame(genes(ig.hg))
+
+
+sig.hg <- genesBySymbol(symbols = unique(mapk$Gene), igis = ig.hg)
+sig.hg.orth <- orthologs(geneIds = sig.hg$GeneID, toSpecies = "mouse",igis = ig.hg)
+sig.mm.orth <- genesById(geneIds = sig.hg.orth$mmusculus_homolog_ensembl_gene, igis = ig.mm)
+
+  
+hg_mm_df = data.frame(human_symbol = sig.hg.orth$Symbol, mouse_id = sig.hg.orth$mmusculus_homolog_ensembl_gene, stringsAsFactors = F)%>%
+    dplyr::left_join(data.frame(mouse_symbol = sig.mm.orth$Symbol, mouse_id =sig.mm.orth$GeneID,stringsAsFactors = F),
+                     by = "mouse_id")%>%
+    na.omit()%>%
+    dplyr::select(human_symbol, mouse_symbol)%>%
+    unique()%>%
+    dplyr::left_join(mapk, by = c("human_symbol" = "Gene"))
+
+  
+```
+
+
+
+```{r, fig.height=12}
+
+
+res.cn = readRDS("data/WES/res.cn.rds")
+res_df = readRDS("data/P5vsP1/res_P5_P1.rds")
+expr = fread("data/P5vsP1/filter_lcpm_expression_correct.tsv",  stringsAsFactors = F, data.table = F)
+
+
+uni_cn = res.cn%>%
+  dplyr::select(-ID)%>%
+  unique()%>%
+  dplyr::select(Symbol, m4.colon.p1, m15.liver.p2,m484.liver.p5)
+
+sel_cn = hg_mm_df%>%
+  dplyr::left_join(uni_cn, by = c("mouse_symbol" = "Symbol"))%>%
+  dplyr::select(-human_symbol)%>%
+  dplyr::filter(pathway!= "ERK5")
+
+ensembl = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+gene_info = getBM(attributes = c('mgi_symbol', 'chromosome_name'),
+                  filters = 'mgi_symbol',
+                  values = sel_cn$mouse_symbol,
+                  mart = ensembl)
+
+sel_cn_chr = sel_cn%>%
+  dplyr::left_join(gene_info, by = c("mouse_symbol" = "mgi_symbol"))%>%
+  dplyr::select(mouse_symbol, chromosome_name, pathway, everything())%>%
+  na.omit()
+
+
+
+
+
+mapk_expr = hg_mm_df%>%
+  dplyr::left_join(expr, by = c("mouse_symbol" = "symbol"))%>%
+  dplyr::group_by(mouse_symbol,pathway)%>%
+  dplyr::summarise_if(is.numeric, mean, na.rm = T)%>%
+  as.data.frame()%>%
+  na.omit()%>%
+  dplyr::filter(pathway != "ERK5")
+  
+
+inter_gene = intersect(mapk_expr$mouse_symbol, sel_cn_chr$mouse_symbol)
+
+mapk_expr_inter = mapk_expr%>%
+  dplyr::filter(mouse_symbol %in% inter_gene)
+match_cn = sel_cn_chr%>%
+    dplyr::filter(mouse_symbol %in% inter_gene)%>%
+  dplyr::arrange(factor(mouse_symbol, levels = mapk_expr_inter$mouse_symbol))
+
+
+
+match_cn = match_cn%>%
+  dplyr::mutate(gcat = case_when(m4.colon.p1 == 2 & (m15.liver.p2 == 3 | m484.liver.p5 == 3) & chromosome_name %in% c(6,15,17) == F  ~ "increase",
+                                  m4.colon.p1 == 2 & (m15.liver.p2 == 3 | m484.liver.p5 == 3) & chromosome_name == 17 ~ "increase1",
+                                 m4.colon.p1 == 2 & (m15.liver.p2 == 3 | m484.liver.p5 == 3) & chromosome_name == 15 ~ "increase2",
+                                 m4.colon.p1 == 2 & (m15.liver.p2 == 3 | m484.liver.p5 == 3) & chromosome_name == 6 ~ "increase3",
+                                m4.colon.p1 > m484.liver.p5 & chromosome_name == 5 ~ "decrease1",
+                                m4.colon.p1 > m484.liver.p5 & chromosome_name == 13 ~ "decrease2",
+                                T ~ "unchange"))%>%
+  dplyr::mutate(gcat = factor(gcat, levels= c("increase1","increase2","increase3", "increase", "unchange", "decrease1","decrease2")))
+  
+
+expr_mat = as.matrix(mapk_expr_inter[, c(3:9)])
+colnames(expr_mat) = colnames(mapk_expr_inter)[3:9]
+rownames(expr_mat) = mapk_expr_inter$mouse_symbol
+
+### standardize rowwise 
+r_m = rowMeans(expr_mat)
+r_sd = rowSds(expr_mat)
+stan_expr = sweep(expr_mat, 1, r_m)
+stan_expr = sweep(stan_expr, 1, r_sd, FUN = "/")
+
+
+# Ensure gcat is a factor
+
+# Initialize an empty list to store clustered data for each group
+row_order <- c()
+
+for(group in levels(match_cn$gcat)) {
+  group_indices <- which(match_cn$gcat == group)
+  group_data <- stan_expr[group_indices, ]
+  
+  if (nrow(group_data) > 1) {
+    # Perform clustering for the group
+    group_dend <- hclust(dist(group_data))
+    ordered_indices <- group_indices[group_dend$order]
+  } else {
+    # If there's only one row in the group, use it as is
+    ordered_indices <- group_indices
+  }
+    row_order <- c(row_order, ordered_indices)
+}
+  
+
+
+# Reorder data based on clustered rows
+ordered_stan_expr <- stan_expr[row_order, ]
+match_cn_order= match_cn[row_order,]
+
+
+mapk_fam = match_cn_order$pathway
+simp_fam = mapk_fam
+simp_fam[grepl("_", mapk_fam)] = "multi"
+
+
+set.seed(123)
+cclor = rainbow(length(unique(match_cn_order$chromosome_name)))
+
+
+la_expr = rowAnnotation(
+  pathway = simp_fam,
+  chromosome = anno_simple(match_cn_order$chromosome_name, pch = match_cn_order$chromosome_name, pt_size = unit(1, "mm"),
+                          col = c( "17" = "#D2816B","15" = "#85EABA","6" = "#D3F575",
+                                   "1" =cclor[1], "2" = cclor[2], "3" = cclor[3], "4" = cclor[4],
+                                   "5" = cclor[5], "7" = cclor[7], "8" = cclor[8], "9" = cclor[9],
+                                   "10" = cclor[10], "11" = cclor[11], "12" = cclor[12], "13" = cclor[13],
+                                   "14" = cclor[14], "16" = cclor[16], "18" = cclor[18], "19" = cclor[19],
+                                   "X" = cclor[20])
+                           ),
+  col = list(
+    pathway = c(
+      "ERK1/2" = "darkslateblue",
+      "JNK" = "darkgreen",
+      "P38" = "darkorange",
+      "multi" = "grey"
+    )
+  )
+)
+ta = HeatmapAnnotation(group =c(rep("P1",4), rep("P5",3)), 
+                       col = list(group = c("P1" = "#2D8686",
+                                            "P5" = "#862D2D")))
+
+col_fun_expr = colorRamp2(c(-2, 0, 2), c("blue","white", "red"))
+
+
+h_expr = Heatmap(as.matrix(ordered_stan_expr),
+             name = "standardized expression",
+        col = col_fun_expr,
+        #row_names_side = "right",
+        row_names_gp = gpar(fontsize = 4.5),
+        column_names_gp = gpar(fontsize = 4),
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        #left_annotation = la_expr, 
+        top_annotation = ta, 
+        cluster_rows = F, cluster_columns = F,
+        column_split = factor(c(rep("P1",4), rep("P5",3)), levels = c("P1", "P5")))
+
+
+
+cn_mat =as.matrix(match_cn_order[, 4:6])
+rownames(cn_mat) =match_cn_order$mouse_symbol
+
+col_fun_af = structure(c("darkblue", "white", "deeppink4"),
+                       names = c(1,2,3))
+
+
+h_cn = Heatmap(as.matrix(cn_mat),
+             name = "median gene CN",
+        col = col_fun_af,
+        left_annotation = la_expr, 
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 5),
+        column_names_gp = gpar(fontsize = 7),
+        rect_gp = gpar(col = "black", lwd = 0.3),
+       #left_annotation = la, 
+       #top_annotation = ta, 
+      cluster_rows = F, 
+       cluster_columns = F)
+        #column_split = factor(c(re
+
+
+### LFC 
+
+
+
+lf_df = rbindlist(lapply(1:nrow(match_cn_order), function(x) {
+  this_gene = match_cn_order$mouse_symbol[x]
+
+    gp15 = res_df%>%
+          dplyr::filter(symbol == this_gene)
+
+    
+  df = data.frame( symbol = this_gene,
+                   lf_p15 = NA, 
+                   fdr_p15 = NA, 
+                   sig_p15 = "",
+                  stringsAsFactors = F)
+   if(nrow(gp15) >0)
+  {
+        df$lf_p15 = gp15$LogFC[1]
+        df$fdr_p15 =  gp15$FDR[1]
+             if(gp15$FDR[1] <= 0.05)
+          df$sig_p15 = "*"
+
+  }
+  
+  return(df)
+  
+}))
+
+sig_mat = as.matrix(lf_df[,4])
+
+lf_mat = as.matrix(lf_df[,2])
+colnames(lf_mat) =  "P5vsP1"
+
+rownames(lf_mat) = lf_df$symbol
+
+col_fun = colorRamp2(c(-2, 0,2), c("blue", "white", "red"))
+
+
+
+
+h_lfc = Heatmap(as.matrix(lf_mat),
+             name = "Log2 FC",
+        col = col_fun,
+         cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%s", sig_mat[i, j]), x, y, gp = gpar(fontsize = 8))
+},
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        column_names_gp = gpar(fontsize = 4),
+        show_row_names = F,
+        #row_names_gp = gpar(fontsize = 5),
+        cluster_rows = F, cluster_columns = F)
+
+
+
+h_cn+h_expr+h_lfc
+
+```
+
+
+
+
+#### chromosome 17, 15, 6
+
+
+```{r}
+
+sel_cn_chr_fil = sel_cn_chr%>%
+  dplyr::filter(chromosome_name %in% c(6, 15,17))
+
+inter_gene = intersect(mapk_expr$mouse_symbol, sel_cn_chr_fil$mouse_symbol)
+
+
+
+mapk_expr_inter = mapk_expr%>%
+  dplyr::filter(mouse_symbol %in% inter_gene)
+match_cn = sel_cn_chr_fil%>%
+    dplyr::filter(mouse_symbol %in% inter_gene)%>%
+  dplyr::arrange(factor(mouse_symbol, levels = mapk_expr_inter$mouse_symbol))
+
+  
+
+expr_mat = as.matrix(mapk_expr_inter[, c(3:9)])
+colnames(expr_mat) = colnames(mapk_expr_inter)[3:9]
+rownames(expr_mat) = mapk_expr_inter$mouse_symbol
+
+### standardize rowwise 
+r_m = rowMeans(expr_mat)
+r_sd = rowSds(expr_mat)
+stan_expr = sweep(expr_mat, 1, r_m)
+stan_expr = sweep(stan_expr, 1, r_sd, FUN = "/")
+
+
+# Ensure gcat is a factor
+
+# Initialize an empty list to store clustered data for each group
+row_order <- c()
+
+for(chr in c("17","15","6")) {
+  group_indices <- which(match_cn$chromosome_name == chr )
+  group_data <- stan_expr[group_indices, ]
+  
+  if (nrow(group_data) > 1) {
+    # Perform clustering for the group
+    group_dend <- hclust(dist(group_data))
+    ordered_indices <- group_indices[group_dend$order]
+  } else {
+    # If there's only one row in the group, use it as is
+    ordered_indices <- group_indices
+  }
+    row_order <- c(row_order, ordered_indices)
+}
+  
+
+
+# Reorder data based on clustered rows
+ordered_stan_expr <- stan_expr[row_order, ]
+match_cn_order= match_cn[row_order,]
+
+
+mapk_fam = match_cn_order$pathway
+simp_fam = mapk_fam
+simp_fam[grepl("_", mapk_fam)] = "multi"
+
+
+
+col_fun_af = structure(c("darkblue", "white", "darkred"),
+                       names = c(1,2,3))
+
+
+la_expr = rowAnnotation(
+  pathway = simp_fam,
+  chromosome = anno_simple(match_cn_order$chromosome_name,
+                           col = c( "17" = "#D2816B","15" = "#85EABA","6" = "#D3F575"),
+                           pch = match_cn_order$chromosome_name, 
+                           pt_size = unit(2.5, "mm")),
+  col = list(
+    pathway = c(
+      "ERK1/2" = "darkslateblue",
+      "JNK" = "darkgreen",
+      "P38" = "darkorange",
+      "multi" = "grey"
+    )
+    # chromosome = c(
+    #   "17" = "#D2816B",
+    #   "15" = "#85EABA",
+    #   "6" = "#D3F575"
+    # )
+  )
+)
+
+
+
+
+col_fun_expr = colorRamp2(c(-2, 0, 2), c("blue","white", "red"))
+
+
+
+
+
+
+hei = unit(square_cal(nrow(as.matrix(ordered_stan_expr)))*50, "cm")
+
+              ta = HeatmapAnnotation(group =c(rep("P1",4), rep("P5",3)), 
+                       col = list(group = c("P1" = "#2D8686",
+                                            "P5" = "#862D2D")))
+
+
+
+h_expr = Heatmap(as.matrix(ordered_stan_expr),
+             name = "standardized expression",
+        col = col_fun_expr,
+               height =hei,
+         width = hei*(ncol(ordered_stan_expr)/nrow(ordered_stan_expr)),
+        row_names_gp = gpar(fontsize = 4.5),
+        column_names_gp = gpar(fontsize = 4),
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        top_annotation = ta, 
+        cluster_rows = F, cluster_columns = F,
+        column_split = factor(c(rep("P1",4), rep("P5",3)), levels = c("P1", "P5")))
+
+
+
+cn_mat =as.matrix(match_cn_order[, 4:6])
+rownames(cn_mat) =match_cn_order$mouse_symbol
+
+col_fun_af = structure(c("darkblue", "white", "deeppink4"),
+                       names = c(1,2,3))
+
+
+h_cn = Heatmap(as.matrix(cn_mat),
+             name = "median gene CN",
+                        height =hei,
+         width = hei*(ncol(cn_mat)/nrow(cn_mat)),
+        col = col_fun_af,
+        left_annotation = la_expr, 
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 9),
+        column_names_gp = gpar(fontsize = 7),
+        rect_gp = gpar(col = "black", lwd = 0.3),
+        cluster_rows = F, 
+        cluster_columns = F)
+
+
+### LFC 
+
+
+
+lf_df = rbindlist(lapply(1:nrow(match_cn_order), function(x) {
+  this_gene = match_cn_order$mouse_symbol[x]
+
+    gp15 = res_df%>%
+          dplyr::filter(symbol == this_gene)
+
+    
+  df = data.frame( symbol = this_gene,
+                   lf_p15 = NA, 
+                   fdr_p15 = NA, 
+                   sig_p15 = "",
+                  stringsAsFactors = F)
+   if(nrow(gp15) >0)
+  {
+        df$lf_p15 = gp15$LogFC[1]
+        df$fdr_p15 =  gp15$FDR[1]
+             if(gp15$FDR[1] <= 0.05)
+          df$sig_p15 = "*"
+
+  }
+  
+  return(df)
+  
+}))
+
+sig_mat = as.matrix(lf_df[,4])
+
+lf_mat = as.matrix(lf_df[,2])
+colnames(lf_mat) =  "P5vsP1"
+
+rownames(lf_mat) = lf_df$symbol
+
+col_fun = colorRamp2(c(-2, 0,2), c("blue", "white", "red"))
+
+
+
+
+h_lfc = Heatmap(as.matrix(lf_mat),
+             name = "Log2 FC",
+        col = col_fun,
+                                height =hei,
+         width = hei*(ncol(lf_mat)/nrow(lf_mat)),
+         cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%s", sig_mat[i, j]), x, y, gp = gpar(fontsize = 8))
+},
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        column_names_gp = gpar(fontsize = 4),
+        #row_names_gp = gpar(fontsize = 5),
+        show_row_names = F,
+        cluster_rows = F, cluster_columns = F)
+
+
+h_cn+h_expr+h_lfc
+
+
+```
+
+

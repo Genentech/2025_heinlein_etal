@@ -1,0 +1,113 @@
+---
+title: "crc_CN_plots"
+output: html_document
+date: "2024-12-17"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+
+
+```
+
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(ggpubr)
+library(ggbeeswarm)
+library(DescTools)
+```
+
+
+
+### percentage plot 
+
+```{r}
+
+dat4plot.sel = readRDS("data/WES/cnv_dat4plot.sel.rds")
+ds = dat4plot.sel%>%
+  dplyr::filter(name %in% c("m4_Colon_P1","m15_Liver_P2", "m484_Liver_P5"))
+
+
+p = ggplot(ds, aes(x=model, y=alt.perc, fill=CNVtype)) + 
+  geom_bar(stat="identity") + 
+  ylab("% of genome alteration") + xlab('') + #labs(title = title) +
+  #scale_fill_discrete() +
+  scale_fill_manual(name="CNV type",values=rev(c("red", "blue", gray(.8)))) +
+  #scale_shape(name="Group") +
+  theme_bw() +
+  theme(text = element_text(size=18),
+        axis.text = element_text(size = 9),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+p
+```
+
+
+
+### boxplot stratifying log2 fc according to CN change between P5 and P1 
+
+
+
+```{r}
+
+res.expr = readRDS("data/P5vsP1/res_P5_P1.rds")
+
+res.cn = readRDS("data/WES/res.cn.rds")%>%
+  dplyr::mutate(p5_p1_change = m484.liver.p5 - m4.colon.p1)%>%
+  dplyr::select(Symbol, p5_p1_change)%>%
+  dplyr::group_by(Symbol)%>%
+  dplyr::summarise(cnChange = mean(p5_p1_change, na.rm =T))%>%
+  dplyr::ungroup()%>%
+  as.data.frame()
+
+
+expr_cn = res.expr%>%
+  dplyr::select(symbol, LogFC)%>%
+  dplyr::group_by(symbol)%>%
+  dplyr::summarise(exprChange = mean(LogFC, na.rm =T))%>%
+  dplyr::ungroup()%>%
+  as.data.frame()%>%
+  dplyr::left_join(res.cn, by = c("symbol" = "Symbol"))%>%
+  dplyr::mutate(cnChange = as.factor(cnChange))%>%
+  na.omit()%>%
+  dplyr::filter(cnChange != -3) ### an outlier 
+
+```
+
+
+
+```{r}
+
+p = ggplot(data = expr_cn, aes(cnChange, exprChange)) +
+  geom_violin(alpha = 0.5, aes(color = cnChange), fill = "grey") +
+  geom_quasirandom(size = 0.01, pch = 16, aes(color = cnChange)) +
+  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.5) +
+  theme_bw() +
+  labs(y = "exprChange (log2 fold)", title = "comparing P5 to P1")
+
+
+
+result <- JonckheereTerpstraTest(exprChange ~ cnChange, data = expr_cn, alternative = "increasing")
+result
+jt_p_value <- result$p.value
+
+
+p <- p + annotate("text", x = Inf, y = Inf, label = paste("JT trend test p-value< 2.2e-16"),
+                  hjust = 1.1, vjust = 1.1, size = 3, color = "black")
+p
+
+
+```
+
+
+
+
+
