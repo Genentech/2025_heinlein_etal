@@ -1,0 +1,538 @@
+---
+title: "crc_revision_P3P4_WES_20250528"
+output: html_document
+date: "2025-05-28"
+---
+
+
+
+get the somatic mutations out of the P3 P4 samples 
+
+
+use Robert's script 
+/gstore/home/piskolr/Projects/Collab/deSauvage_lab/2021_04_NGS3660_Passaged_AKPS_WES/scripts/Somatic_analyze.R
+
+```{r}
+
+library(VariantAnnotation)
+library(Vennerable)
+library(dplyr)
+library(tidyr)
+
+cwd <- "/gstore/project/crc_metastasis/revision/P3P4_WES"
+
+
+congee.indir <- "/gstore/data/genomics/congee_rest_runs/6835dfe0f719730fbb8e834f/"
+grp <- "P0_2"
+congee.indir <- "/gstore/data/genomics/congee_rest_runs/60c3f787a2285de000daafda"
+
+indir.lst  = paste0(congee.indir, c("SAM24488703","SAM24488704"),"/croo_output")
+
+#indir.lst <- system(sprintf("find %s -wholename *wes_somatic_mouse*results | sort", congee.indir), intern = TRUE)
+
+
+results <- lapply(indir.lst, function(indir){
+  message(indir)
+  SAMID <- unlist(strsplit(indir, "/"))[7]
+
+  f1 <- list.files(indir, pattern="snvs.*out", full.names = TRUE)
+  f2 <- list.files(indir, pattern="mutect.*out", full.names = TRUE)
+
+  fl <- c(f1,f2)
+  fl = grep(".tbi", fl, value = T, invert = T)
+
+  vcf.l <- lapply(fl, function(f){
+    readVcf(f)
+  })
+
+  names(vcf.l) <- sapply(strsplit(basename(fl), "_"), "[[", 2)
+
+
+vcf.processed.l <- lapply(names(vcf.l), function(x){
+
+    if(x == "lofreq"){
+      message("processing lofreq")
+      vcf.processed <- process.lofreq(vcf.l[[x]])
+    } else if(x == "strelka"){
+      message("processing strelka")
+      vcf.processed <- process.strelka(vcf.l[[x]])
+    } else if( x == "mutect2"){
+      message("processing mutect")
+      vcf.processed <- process.mutect2(vcf.l[[x]], pass.only = FALSE)
+    }
+
+    return(vcf.processed)
+  })
+
+  names(vcf.processed.l) <- names(vcf.l)
+
+  ################
+  # plot venn of 
+  vcf.l.names <- lapply(vcf.processed.l, function(x){
+    x$ID
+  })
+
+  v <- Venn(vcf.l.names)
+  pdf(file.path(cwd, sprintf("figures/%s.somaticcalleroverlap.%s.pdf", SAMID, grp)))
+  plot(v)
+  dev.off()
+
+  vcf.basic.l <- lapply(vcf.processed.l, function(x){
+    x[,1:9]
+  })
+
+  vcf.basic.bind <- do.call(rbind, vcf.basic.l)
+  ID.tab <- table(vcf.basic.bind$ID)
+  vcf.basic.bind.uniq <- unique(vcf.basic.bind)
+  vcf.basic.bind.uniq$n.methods <- ID.tab[match(vcf.basic.bind.uniq$ID, names(ID.tab))]
+
+  vcf.basic.bind.uniq$AF.lofreq <- vcf.processed.l$lofreq[match(vcf.basic.bind.uniq$ID, vcf.processed.l$lofreq$ID),"AF"]
+  vcf.basic.bind.uniq$AF.strelka <- vcf.processed.l$strelka[match(vcf.basic.bind.uniq$ID, vcf.processed.l$strelka$ID),"AF"]
+  vcf.basic.bind.uniq$AF.mutect <- vcf.processed.l$mutect2[match(vcf.basic.bind.uniq$ID, vcf.processed.l$mutect2$ID),"AF"]
+  vcf.basic.bind.uniq$AF.mean <- rowMeans(vcf.basic.bind.uniq[,c("AF.lofreq","AF.strelka", "AF.mutect")], na.rm = TRUE)
+
+  vcf.basic.bind.uniq$CSQ.lofreq <- vcf.processed.l$lofreq[match(vcf.basic.bind.uniq$ID, vcf.processed.l$lofreq$ID),"CSQ"]
+  vcf.basic.bind.uniq$CSQ.strelka <- vcf.processed.l$strelka[match(vcf.basic.bind.uniq$ID, vcf.processed.l$strelka$ID),"CSQ"]
+  vcf.basic.bind.uniq$CSQ.mutect <- vcf.processed.l$mutect2[match(vcf.basic.bind.uniq$ID, vcf.processed.l$mutect2$ID),"CSQ"]
+
+  vcf.basic.bind.uniq <- vcf.basic.bind.uniq %>% arrange(desc(n.methods), desc(AF.mean))
+
+  return(vcf.basic.bind.uniq)
+
+})
+
+
+
+names(results) <- sapply(strsplit(indir.lst, "/"), "[[",7)
+
+
+saveRDS(results, file.path(cwd, sprintf("results/NGS6581.%s.somatic_calls.rds",grp)))
+#openxlsx::write.xlsx(results, file.path(cwd, sprintf("results/NGS6581.%s.somatic_calls.xlsx", grp)))
+# figure out what effects may be interesting
+
+effects <- apply(results$SAM24488703[, c("CSQ.lofreq", "CSQ.strelka", "CSQ.mutect")], 1 , paste, collapse=" | ")
+effects.l <- strsplit(effects, " \\| ")
+sapply(seq_along(effects.l), function(i){
+  message(i)
+  x <- effects.l[[i]][grepl(",",effects.l[[i]])]
+  sapply(strsplit(x, ","), "[[", 2)
+}) %>% unlist() %>% table() %>% sort()
+
+effects.interest <- c("missense_variant", "NMD_transcript_variant", "frameshift_variant", "start_lost", "stop_gained")
+
+################
+# select results that only have the specific effects
+results.sel <- lapply(names(results), function(samid){
+
+  r <- results[[samid]]
+
+  r$SAMID <- samid
+
+  effects <- apply(r[, c("CSQ.lofreq", "CSQ.strelka", "CSQ.mutect")], 1 , paste, collapse=" | ")
+  r$effects.merged  <- effects
+
+  r$use.effect <- sapply(seq_along(effects), function(i){
+    any(sapply(effects.interest, function(x){
+      grepl(x, effects[[i]])
+    })
+    )
+  })
+
+  r.sel <- r %>% filter(AF.mean > 0.39 & use.effect & n.methods > 1)
+  return(r.sel)
+})
+
+
+results.sel.bind <- do.call(rbind, results.sel)
+
+r <- results.sel.bind %>% dplyr::select(ID, effects.merged, SAMID, AF.mean) %>% unique()%>%spread(SAMID, AF.mean) %>%
+  mutate(AF.clonemean = rowMeans(dplyr::select(.,starts_with("SAM")), na.rm = TRUE),
+         n.AF.present = rowSums(!is.na(dplyr::select(.,starts_with("SAM"))))) %>%
+  arrange(desc(n.AF.present), desc(AF.clonemean))
+  View()
+
+saveRDS(r, file.path(cwd, sprintf("results/NGS6581.%s.somatic_calls_summary.rds", grp)))
+
+
+
+```
+
+
+functions 
+
+
+```{r}
+
+process.lofreq <- function(x){
+
+  d.r <- rowRanges(x) %>% as.data.frame()
+  d.i <- info(x) %>% as.data.frame()
+  d.r$ALT <- unlist(sapply(d.r$ALT, function(x){paste(as.character(x),collapse=",")}))
+  d.r <- cbind(d.r, d.i[,c("DP","AF")])
+
+  d.csq.l <- lapply(seq_along(d.i$CSQ), function(i){
+    #message(i)
+    csq <- d.i$CSQ[[i]]
+    d.csq <- do.call(rbind,lapply(strsplit(csq, "\\|"), function(x){x[1:40]}))
+    d.csq.str <- paste(apply(unique(d.csq[,c(4,2,17,16,14,15,7,26),drop=FALSE]),1, paste, collapse=","), collapse=" | ")
+  })
+
+  d.r$CSQ <- unlist(d.csq.l)
+  d.r <- data.frame(ID=rownames(d.r), d.r)
+  return(d.r)
+}
+
+process.strelka <- function(x){
+  d.r <- rowRanges(x) %>% as.data.frame() %>% mutate(ID=rownames(.))
+
+  d.i <- info(x) %>% as.data.frame()
+  d.g <- geno(x)
+  d.r$ALT <- unlist(sapply(d.r$ALT, function(x){paste(as.character(x),collapse=",")}))
+
+
+  AF.l <- lapply(1:nrow(d.r), function(i){
+
+    nuc.ref <- d.r[i, "REF"]
+    nuc.alt <- d.r[i, "ALT"]
+
+    cnt.ref <- d.g[[sprintf("%sU",nuc.ref)]][i, 2, 1]
+    d <- lapply(unlist(strsplit(nuc.alt, ",")), function(x){
+      cnt.alt <- d.g[[sprintf("%sU",x)]][i, 2, 1]
+      AF <- cnt.alt/(cnt.alt + cnt.ref)
+      DP <- (cnt.alt + cnt.ref)
+      return(data.frame(ID=d.r$ID[i],REF=nuc.ref, ALT=x, DP=DP, AF=AF))
+    })
+    d.bind <- do.call(rbind, d)
+    # cnt.alt <- d.g[[sprintf("%sU",nuc.alt)]][i, 2, 1]
+    # 
+    # AF <- cnt.alt/(cnt.alt + cnt.ref)
+    # DP <- (cnt.alt + cnt.ref)
+    # return(c(DP=DP,AF=AF))
+  })
+  d.r.merge <- merge(d.r, do.call(rbind, AF.l), by="ID") %>% mutate(REF=REF.y, ALT=ALT.y) %>% dplyr::select(-c("REF.x", "ALT.x", "REF.y", "ALT.y"))
+  d.r.merge <- d.r.merge[,c(1:7,12,13,8:11)]
+
+  d.csq.l <- lapply(seq_along(d.i$CSQ), function(i){
+    #message(i)
+    csq <- d.i$CSQ[[i]]
+    d.csq <- do.call(rbind,lapply(strsplit(csq, "\\|"), function(x){x[1:40]}))
+    d.csq.str <- paste(apply(unique(d.csq[,c(4,2,17,16,14,15,7,26),drop=FALSE]),1, paste, collapse=","), collapse=" | ")
+  })
+  names(d.csq.l) <- rownames(d.i)
+
+  d.r.merge$CSQ <- unlist(d.csq.l[d.r.merge$ID])
+  d.r.merge$ID <-  sprintf("%s:%s_%s/%s", d.r.merge$seqnames, d.r.merge$start, d.r.merge$REF, d.r.merge$ALT)
+
+
+  return(d.r.merge)
+  #d.r <- data.frame(ID=rownames(d.r), d.r)
+
+}
+
+
+x <- vcf.l$mutect
+process.mutect2 <- function(x, pass.only=TRUE){
+  library(parallel)
+
+  if(pass.only){
+    x <- x[rowRanges(x)$FILTER == "PASS"]
+  }
+
+  d.r <- rowRanges(x) %>% as.data.frame()
+  d.i <- info(x) %>% as.data.frame()
+  d.g <- geno(x) #cbind(d.r, d.i[,c("DP","AF")])
+  d.r$ALT <- unlist(sapply(d.r$ALT, function(x){paste(as.character(x),collapse=",")}))
+  d.r$DP <- unlist(d.g$DP[,2])
+  #d.r$AF <- unlist(sapply(d.g$AF[,2], function(x){paste(as.character(x),collapse=",")}))
+  d.r$AF <- unlist(sapply(d.g$AF[,2], function(x){max(x)})) # only select max AF
+
+  d.csq.l <- mclapply(seq_along(d.i$CSQ), function(i){
+    message(i)
+    csq <- d.i$CSQ[[i]]
+    d.csq <- do.call(rbind,lapply(strsplit(csq, "\\|"), function(x){x[1:40]}))
+    d.csq.str <- paste(apply(unique(d.csq[,c(4,2,17,16,14,15,7,26),drop=FALSE]),1, paste, collapse=","), collapse=" | ")
+  }, mc.cores=6)
+
+  d.r$CSQ <- unlist(d.csq.l)
+  d.r <- data.frame(ID=rownames(d.r), d.r)
+  return(d.r)
+}
+
+
+
+```
+
+
+
+## plot something 
+
+
+
+
+```{r}
+
+
+mut_sum = readRDS("/gstore/project/crc_metastasis/revision/P3P4_WES/results/NGS6581.P0_2.somatic_calls_summary.rds")
+
+
+library(data.table)
+library(dplyr)
+library(magrittr)
+library(ComplexHeatmap)
+library(circlize)
+
+### want to summarize this into genes and each column is a sample but in 5/6 categories 
+### grab gene level info 
+
+
+sel_mut = mut_sum%>%
+  as.data.frame()%>%
+  dplyr::select(ID, effects.merged,SAM24488703,SAM24488704)%>%
+  dplyr::filter((is.na(SAM24488703)&is.na(SAM24488704)) == F)%>%
+  dplyr::mutate(gene = gsub(",.*","", effects.merged))%>%
+  dplyr::mutate(gene = gsub("NA \\| ","", gene))%>%
+  dplyr::mutate(isMissense = case_when(grepl("missense", effects.merged) ~ "Missense", 
+                                       T ~ ""))%>%
+  dplyr::mutate(isNMD = case_when(grepl("NMD_", effects.merged) ~ "NMD", 
+                                       T ~ ""))%>%
+  dplyr::mutate(isframeshift = case_when(grepl("frameshift_variant", effects.merged) ~ "Frameshift",   #### no one is frameshift
+                                       T ~ ""))%>%
+  dplyr::mutate(isStartlost = case_when(grepl("start_lost", effects.merged) ~ "Startlost",    ### no one is start loss
+                                       T ~ ""))%>%
+  dplyr::mutate(isStopgain = case_when(grepl("stop_gained", effects.merged) ~ "Stopgained", 
+                                       T ~ ""))%>%
+  dplyr::select(-isStartlost)%>%
+  dplyr::select(-isframeshift)%>%
+  dplyr::mutate(alltype = paste(isMissense, isNMD, isStopgain, sep = ""))
+  
+
+tile_mat = sel_mut%>%
+  dplyr::select(gene, SAM24488703,SAM24488704 ,alltype)%>%
+  dplyr::mutate(SAM24488703 = case_when(is.na(SAM24488703) ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::mutate(SAM24488704 = case_when(is.na(SAM24488704) ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::select(-alltype)
+  
+
+
+tm=as.matrix(tile_mat[, 2:3])
+rownames(tm) = tile_mat$gene
+colnames(tm) = c("SAM24488703","SAM24488704")
+
+
+
+ta = HeatmapAnnotation(passage =c("P3","P4"),
+                       col = list(passage = c("P3" = "#2D8686", "P4"= "#592D86")))
+
+dist_mut = function(x, y) {
+  
+  x[is.na(x)] = 0
+  x[which(x == "Missense")] = 1
+  x[which(x == "MissenseNMD")] = 2
+  x[which(x == "NMD")] = 3
+  x[which(x == "Stopgained")] = 4
+  x= as.numeric(x)
+
+  y[is.na(y)] = 0
+  y[which(y == "Missense")] = 1
+  y[which(y == "MissenseNMD")] = 2
+  y[which(y == "NMD")] = 3
+  y[which(y == "Stopgained")] = 4
+  y= as.numeric(y)
+
+  
+    sqrt(sum((x - y)^2))
+}
+
+square_cal = function(n)
+{
+  if(n > 10)
+  {
+      c = ceiling(log10(n))
+  p = n/(10**c)
+  }else{
+      c = ceiling(log10(n))
+  p = n/(100**c)
+
+  }
+
+  if(n == 1)
+  {
+    p = 0.01
+  }
+
+  return(p)
+
+}
+
+
+
+hei = unit(square_cal(nrow(tm))*40, "cm")
+
+hm = Heatmap(tm, 
+        name = "mutations", 
+        col = structure(c("seagreen","gold","darkorange","maroon"),
+                                                names = c("Missense","MissenseNMD","NMD","Stopgained")),
+        height = hei, 
+        width = hei*(ncol(tm)/nrow(tm)), 
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        column_names_gp = gpar(fontsize = 6),
+        top_annotation = ta, 
+        clustering_distance_rows = dist_mut, 
+        cluster_columns = F
+    )
+
+
+```
+
+
+## plot P1, P2, P3, P4, P5 together 
+
+
+```{r}
+
+mut_sum0 = readRDS("/gstore/home/piskolr/Projects/Collab/deSauvage_lab/2021_04_NGS3660_Passaged_AKPS_WES/results/NGS3660.P0_2.somatic_calls_summary.rds")%>%
+    dplyr::select(ID, effects.merged,SAM24400842,SAM24400845,SAM24400853)
+
+mut_sum = readRDS("/gstore/project/crc_metastasis/revision/P3P4_WES/results/NGS6581.P0_2.somatic_calls_summary.rds")%>%
+  dplyr::select(ID, effects.merged,SAM24488704,SAM24488703)
+
+mut_sum0_simp = mut_sum0%>%
+    dplyr::mutate(gene = gsub(",.*","", effects.merged))%>%
+  dplyr::mutate(gene = gsub("NA \\| ","", gene))%>%
+    dplyr::mutate(isMissense = case_when(grepl("missense", effects.merged) ~ "Missense", 
+                                       T ~ ""))%>%
+  dplyr::mutate(isNMD = case_when(grepl("NMD_", effects.merged) ~ "NMD", 
+                                       T ~ ""))%>%
+  dplyr::mutate(isframeshift = case_when(grepl("frameshift_variant", effects.merged) ~ "Frameshift",   #### no one is frameshift
+                                       T ~ ""))%>%
+  dplyr::mutate(isStartlost = case_when(grepl("start_lost", effects.merged) ~ "Startlost",    ### no one is start loss
+                                       T ~ ""))%>%
+  dplyr::mutate(isStopgain = case_when(grepl("stop_gained", effects.merged) ~ "Stopgained", 
+                                       T ~ ""))%>%
+  dplyr::select(ID,  gene, isMissense, isNMD, isStopgain,SAM24400842,SAM24400845,SAM24400853)
+  
+
+mut_sum_simp = mut_sum%>%
+    dplyr::mutate(gene = gsub(",.*","", effects.merged))%>%
+  dplyr::mutate(gene = gsub("NA \\| ","", gene))%>%
+    dplyr::mutate(isMissense = case_when(grepl("missense", effects.merged) ~ "Missense", 
+                                       T ~ ""))%>%
+  dplyr::mutate(isNMD = case_when(grepl("NMD_", effects.merged) ~ "NMD", 
+                                       T ~ ""))%>%
+  dplyr::mutate(isframeshift = case_when(grepl("frameshift_variant", effects.merged) ~ "Frameshift",   #### no one is frameshift
+                                       T ~ ""))%>%
+  dplyr::mutate(isStartlost = case_when(grepl("start_lost", effects.merged) ~ "Startlost",    ### no one is start loss
+                                       T ~ ""))%>%
+  dplyr::mutate(isStopgain = case_when(grepl("stop_gained", effects.merged) ~ "Stopgained", 
+                                       T ~ ""))%>%
+    dplyr::select(ID,  gene, isMissense, isNMD, isStopgain,SAM24488703,SAM24488704)
+
+  
+
+
+sel_mut = mut_sum0_simp%>%
+  dplyr::full_join(mut_sum_simp, by = c("ID", "gene","isMissense","isNMD","isStopgain"))%>%
+  as.data.frame()%>%
+  dplyr::filter((is.na(SAM24488703)&is.na(SAM24488704) &is.na(SAM24400842)&is.na(SAM24400845)&is.na(SAM24400853)) == F)%>%
+  dplyr::mutate(alltype = paste(isMissense, isNMD, isStopgain, sep = ""))
+  
+
+tile_mat = sel_mut%>%
+  dplyr::select(gene, SAM24400842, SAM24400845 ,SAM24488703,SAM24488704 ,SAM24400853,alltype)%>%
+  dplyr::mutate(SAM24488703 = case_when(is.na(SAM24488703) ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::mutate(SAM24488704 = case_when(is.na(SAM24488704) ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::mutate(SAM24400842 = case_when(is.na(SAM24400842) ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::mutate(SAM24400845 = case_when(is.na(SAM24400845) ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::mutate(SAM24400853 = case_when(is.na(SAM24400853) ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::select(-alltype)
+  
+
+
+tm=as.matrix(tile_mat[, 2:6])
+rownames(tm) = tile_mat$gene
+colnames(tm) = c("SAM24400842", "SAM24400845", "SAM24488703","SAM24488704","SAM24400853")
+
+
+
+ta = HeatmapAnnotation(passage =c("P1","P2", "P3","P4","P5"),
+                       col = list(passage = c("P1" = "#2D8686", "P2"= "#592D86",
+                                              "P3" = "darkorange", "P4"= "darkgreen",
+                                              "P5" = "#862D2D")))
+
+dist_mut = function(x, y) {
+  
+  x[is.na(x)] = 0
+  x[which(x == "Missense")] = 1
+  x[which(x == "MissenseNMD")] = 2
+  x[which(x == "NMD")] = 3
+  x[which(x == "Stopgained")] = 4
+  x= as.numeric(x)
+
+  y[is.na(y)] = 0
+  y[which(y == "Missense")] = 1
+  y[which(y == "MissenseNMD")] = 2
+  y[which(y == "NMD")] = 3
+  y[which(y == "Stopgained")] = 4
+  y= as.numeric(y)
+
+  
+    sqrt(sum((x - y)^2))
+}
+
+square_cal = function(n)
+{
+  if(n > 10)
+  {
+      c = ceiling(log10(n))
+  p = n/(10**c)
+  }else{
+      c = ceiling(log10(n))
+  p = n/(100**c)
+
+  }
+
+  if(n == 1)
+  {
+    p = 0.01
+  }
+
+  return(p)
+
+}
+
+
+
+hei = unit(square_cal(nrow(tm))*40, "cm")
+
+hm = Heatmap(tm, 
+        name = "mutations", 
+        col = structure(c("seagreen","gold","darkorange","maroon"),
+                                                names = c("Missense","MissenseNMD","NMD","Stopgained")),
+        height = hei, 
+        width = hei*(ncol(tm)/nrow(tm)), 
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        column_names_gp = gpar(fontsize = 6),
+        top_annotation = ta, 
+        clustering_distance_rows = dist_mut, 
+        cluster_columns = F
+    )
+
+
+
+
+pdf("/gstore/project/crc_metastasis/revision/P3P4_WES/figures/mut_freq_heatmap_noAF_P12345_20250528.pdf", height = 18, width = 5, useDingbats = F)
+ hm
+ dev.off()
+```
+

@@ -1,0 +1,371 @@
+---
+title: "crc_revision_ATAC_vivo_vitro_merge"
+output: html_document
+date: "2025-07-20"
+---
+```{r}
+
+library(dplyr)
+library(magrittr)
+library(data.table)
+library(DiffBind)
+library(ggplot2)
+library(ggrepel)
+```
+
+
+```{r}
+
+samples_vivo = read.csv("/gstore/home/lix335/crc_metastasis_ATAC/config.csv")
+samples_vitro = read.csv("/gstore/home/lix335/crc_metastasis_ATAC/config.inhibitP5.csv")%>%
+  dplyr::select(-condition)%>%
+  dplyr::select(-folder_name)
+samples = rbind(samples_vivo, samples_vitro)
+merged = dba(sampleSheet = samples)
+
+plot(merged)
+```
+
+
+```{r}
+merged_filtered <- dba.blacklist(
+    merged,
+    blacklist = DBA_BLACKLIST_MM10,
+    greylist = FALSE
+)
+```
+
+
+
+```{r}
+
+merged_filtered = dba.count(merged_filtered)
+saveRDS(merged_filtered, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/invivo_invitro_merged_afterCount.Rds")
+dba.show(merged_filtered)
+
+
+```
+
+```{r}
+
+merged_filtered_tmm = dba.normalize(merged_filtered, 
+                   normalize = DBA_NORM_TMM,
+                   method = DBA_DESEQ2)
+
+saveRDS(merged_filtered_tmm, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/invivo_invitro_merged_afterCount_afterTMM.Rds")
+
+
+merged_filtered_tmm = readRDS("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/invivo_invitro_merged_afterCount_afterTMM.Rds")
+
+
+dba.plotPCA(merged_filtered_tmm,DBA_CONDITION,label=DBA_CONDITION)
+
+dba.plotPCA(merged_filtered_tmm,DBA_CONDITION,label=DBA_CONDITION, components = 1:3, b3D = T)
+dba.plotPCA(merged_filtered_tmm,DBA_CONDITION,label=DBA_CONDITION, components = 1:3, b3D = T)
+dba.plotPCA(merged_filtered_tmm,DBA_CONDITION,label=DBA_CONDITION, components = c(1,3))
+dba.plotPCA(merged_filtered_tmm,DBA_CONDITION,label=DBA_CONDITION, components = c(2,3))
+
+dba.plotPCA(merged_filtered_tmm,contrast=1,th=1)
+
+```
+
+
+
+```{r}
+
+merged_filtered_tmm = dba.contrast(merged_filtered_tmm, contrast =c("Condition", "P5", "P1"))
+merged_filtered_tmm = dba.contrast(merged_filtered_tmm, contrast =c("Condition", "p5", "p1"))
+merged_filtered_tmm = dba.contrast(merged_filtered_tmm, contrast =c("Condition", "P1", "p1"))
+merged_filtered_tmm = dba.contrast(merged_filtered_tmm, contrast =c("Condition", "P5", "p5"))
+merged_filtered_tmm = dba.contrast(merged_filtered_tmm, contrast =c("Condition", "A485", "p5"))
+
+merged_filtered_tmm = dba.analyze(merged_filtered_tmm,
+                  method = DBA_DESEQ2,
+                  bBlacklist = F,
+                  bGreylist = F,
+                  bReduceObjects = F)
+
+
+
+dba.plotPCA(merged_filtered_tmm,DBA_CONDITION,label=DBA_CONDITION, contrast = 1)
+dba.plotPCA(merged_filtered_tmm,DBA_CONDITION,th=1)
+
+dba.plotVolcano(merged_filtered_tmm, contrast = 1)
+
+P5_P1 = as.data.frame(dba.report(merged_filtered_tmm, contrast = 1,  th = 1, bCounts = T))
+write.table(P5_P1, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/merged_afterNorm_tmm_report_vivo_P5_P1.tsv",
+            quote = F, row.names = F, sep ="\t")
+
+
+
+p5_p1 = as.data.frame(dba.report(merged_filtered_tmm, contrast =2,  th = 1, bCounts = T))
+write.table(p5_p1, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/merged_afterNorm_tmm_report_vitro_p5_p1.tsv",
+            quote = F, row.names = F, sep ="\t")
+
+
+P1_p1 = as.data.frame(dba.report(merged_filtered_tmm, contrast =3,  th = 1, bCounts = T))
+dba.plotVolcano(merged_filtered_tmm, contrast = 3)
+
+write.table(P1_p1, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/merged_afterNorm_tmm_report_vivo_vitro_P1_p1.tsv",
+            quote = F, row.names = F, sep ="\t")
+
+
+
+P5_p5 = as.data.frame(dba.report(merged_filtered_tmm, contrast =4,  th = 1, bCounts = T))
+dba.plotVolcano(merged_filtered_tmm, contrast = 4)
+
+write.table(P5_p5, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/merged_afterNorm_tmm_report_vivo_vitro_P5_p5.tsv",
+            quote = F, row.names = F, sep ="\t")
+
+
+A485_p5 = as.data.frame(dba.report(merged_filtered_tmm, contrast =5,  th = 1, bCounts = T))
+dba.plotVolcano(merged_filtered_tmm, contrast = 5)
+
+write.table(A485_p5, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/merged_afterNorm_tmm_report_vitro_A485_p5.tsv",
+            quote = F, row.names = F, sep ="\t")
+
+```
+
+
+
+
+## analyze PCAs in this data 
+
+
+```{r}
+
+get_top_peaks_merge = function(rotation, topN, file_tag = "pc1")
+{
+  # 
+  # rotation = pc1_rotation
+  # topN = 3000
+  # file_tag = "pc1"
+  
+  
+  df = data.frame(binding[,1:3], pc = rotation, stringsAsFactors = F)%>%
+    dplyr::mutate(strand = "*")%>%
+    dplyr::mutate(seqnames = paste0("chr",CHR), start = as.integer(START), end = as.integer(END))
+    
+  
+  bg_peaks = df%>%
+    dplyr::mutate(ID = paste(seqnames, start, end, sep = "_"))%>%
+    dplyr::mutate(notused = "")%>%
+    dplyr::select(seqnames, start, end, ID, notused, strand)
+  
+  
+  write.table(bg_peaks, paste0("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA_merge/", file_tag,"_bg_peak.bed"),
+              quote = F, row.names = F, col.names = F, sep = "\t")
+  
+  
+    
+    sel_up = df%>%
+      dplyr::arrange(desc(pc))%>%
+      dplyr::top_n(topN, pc)%>%
+      dplyr::mutate(ID = paste(seqnames, start, end, sep = "_"))%>%
+      dplyr::mutate(notused = "")%>%
+      dplyr::select(seqnames, start, end, ID, notused, strand)
+    
+    tag = paste0(file_tag,"_", topN, "_up")
+    
+    write.table(sel_up, paste0("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA_merge/", tag,"_peak.bed"),
+                quote = F, row.names = F, col.names = F, sep = "\t")
+    
+    
+      
+    sel_down = df%>%
+      dplyr::arrange(desc(pc))%>%
+      dplyr::top_n(-topN, pc)%>%
+      dplyr::mutate(ID = paste(seqnames, start, end, sep = "_"))%>%
+      dplyr::mutate(notused = "")%>%
+      dplyr::select(seqnames, start, end, ID, notused, strand)
+    
+    tag = paste0(file_tag,"_", topN, "_down")
+    
+    write.table(sel_down, paste0("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA_merge/", tag,"_peak.bed"),
+                quote = F, row.names = F, col.names = F, sep = "\t")
+  
+  
+}
+```
+
+
+
+
+
+```{r}
+binding = merged_filtered_tmm$binding
+
+## run PCA on it 
+
+binding_mat = binding[, -c(1:3)]
+
+
+
+
+col_code = data.frame(type = unique(merged_filtered_tmm$samples$Condition), 
+                      color = c("darkblue","maroon","skyblue", "grey","green","orange","lightpink","black"))
+  
+  pc = prcomp(t(binding_mat), scale = T)
+  pc_v = pc$sdev/sum(pc$sdev)*100
+  pc_v = round(pc_v, 2)
+  
+  pc_df = data.frame(sample = colnames(binding_mat), 
+                     simp_name = merged_filtered_tmm$samples$SampleID,
+                     type = merged_filtered_tmm$samples$Condition,
+                     PC1 = pc$x[,1], PC2 = pc$x[,2], stringsAsFactors = F)
+  
+  
+  mark_t = as.data.frame(table(pc_df$type))%>%
+    dplyr::left_join(col_code, by = c("Var1" = "type"))%>%
+    dplyr::arrange(Var1)
+  
+  
+  wid = max(pc_df$PC1) - min(pc_df$PC1)
+  hei = max(pc_df$PC2) - min(pc_df$PC2)
+  
+  
+  p = ggplot(pc_df, aes(PC1,PC2))+
+    geom_point(aes(color = type),
+               size = 2) +
+    scale_colour_manual(values=mark_t$color, name = "", labels = mark_t$Var1)+
+    geom_text_repel(data = pc_df, aes(PC1, PC2, label = simp_name),
+                    size = 2,
+                    segment.size = 0.3,
+                    segment.alpha = 0.3,
+                    force = 4,
+                    max.overlaps = Inf,
+                    box.padding = unit(0.35, "lines"),
+                    point.padding = unit(0.3, "lines"),
+                    seed = 123)+
+    theme_bw()+
+    theme(text = element_text(size=7)) +
+    coord_fixed(ratio = wid/hei)+
+    ggtitle("PCA on binding matrix merged_filtered_tmm")+
+    labs(x= paste0("PC1 ", pc_v[1], "%"),
+         y = paste0("PC2 ", pc_v[2], "%"))
+ 
+   
+p
+ggsave("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA_merge/pca_plot_merge_PC12_samID.pdf")
+  
+  
+  
+  wid = max(pc_df$PC1) - min(pc_df$PC1)
+  hei = max(pc_df$PC2) - min(pc_df$PC2)
+
+  p1 = ggplot(pc_df, aes(PC1,PC2))+
+    geom_point(aes(color = type),
+               size = 2) +
+    scale_colour_manual(values=mark_t$color, name = "", labels = mark_t$Var1)+
+    geom_text_repel(data = pc_df, aes(PC1, PC2, label = type),
+                    size = 2,
+                    segment.size = 0.3,
+                    segment.alpha = 0.3,
+                    force = 4,
+                    max.overlaps = Inf,
+                    box.padding = unit(0.35, "lines"),
+                    point.padding = unit(0.3, "lines"),
+                    seed = 123)+
+    theme_bw()+
+    theme(text = element_text(size=7)) +
+    coord_fixed(ratio = wid/hei)+
+    ggtitle("PCA on binding matrix merged_filtered_tmm")+
+    labs(x= paste0("PC1 ", pc_v[1], "%"),
+         y = paste0("PC2 ", pc_v[2], "%"))
+ 
+p1
+ggsave("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA_merge/pca_plot_merge_PC12_type.pdf")
+  
+
+  pc_df2 = data.frame(sample = colnames(binding_mat), 
+                     simp_name = merged_filtered_tmm$samples$SampleID,
+                     type = merged_filtered_tmm$samples$Condition,
+                     PC1 = pc$x[,1], PC3 = pc$x[,3], stringsAsFactors = F)
+  
+  
+  
+  
+  wid = max(pc_df2$PC1) - min(pc_df2$PC1)
+  hei = max(pc_df2$PC3) - min(pc_df2$PC3)
+  
+  
+  p2 = ggplot(pc_df2, aes(PC1,PC3))+
+    geom_point(aes(color = type),
+               size = 2) +
+    scale_colour_manual(values=mark_t$color, name = "", labels = mark_t$Var1)+
+    geom_text_repel(data = pc_df2, aes(PC1, PC3, label = simp_name),
+                    size = 2,
+                    segment.size = 0.3,
+                    segment.alpha = 0.3,
+                    force = 4,
+                    max.overlaps = Inf,
+                    box.padding = unit(0.35, "lines"),
+                    point.padding = unit(0.3, "lines"),
+                    seed = 123)+
+    theme_bw()+
+    theme(text = element_text(size=7)) +
+    coord_fixed(ratio = wid/hei)+
+    ggtitle("PCA on binding matrix merged_filtered_tmm")+
+    labs(x= paste0("PC1 ", pc_v[1], "%"),
+         y = paste0("PC3 ", pc_v[3], "%"))
+  
+```
+
+
+```{r}
+
+pc1_rotation = pc$rotation[,1]
+pc2_rotation = pc$rotation[,2]
+pc3_rotation = pc$rotation[,3]
+
+
+
+
+get_top_peaks_merge(rotation = pc1_rotation,
+              topN = 3000,
+              file_tag = "pc1")
+
+
+get_top_peaks_merge(rotation = pc2_rotation,
+              topN = 3000,
+              file_tag = "pc2")
+
+
+get_top_peaks_merge(rotation = pc3_rotation,
+              topN = 3000,
+              file_tag = "pc3")
+
+
+get_top_peaks_merge(rotation = pc1_rotation,
+              topN = 5000,
+              file_tag = "pc1")
+
+
+get_top_peaks_merge(rotation = pc2_rotation,
+              topN = 5000,
+              file_tag = "pc2")
+
+
+get_top_peaks_merge(rotation = pc3_rotation,
+              topN = 5000,
+              file_tag = "pc3")
+
+
+get_top_peaks_merge(rotation = pc1_rotation,
+              topN = 7000,
+              file_tag = "pc1")
+
+
+get_top_peaks_merge(rotation = pc2_rotation,
+              topN = 7000,
+              file_tag = "pc2")
+
+
+get_top_peaks_merge(rotation = pc3_rotation,
+              topN = 7000,
+              file_tag = "pc3")
+
+
+
+```
+

@@ -1,0 +1,269 @@
+---
+title: "crc_revision_ATAC_p5Inhibit_postHomer_sensitivity_20250719"
+output: html_document
+date: "2025-07-19"
+---
+
+
+```{r}
+
+library(dplyr)
+library(magrittr)
+library(data.table)
+library(ggplot2)
+library(ggrepel)
+
+
+```
+
+
+read in the HOMER results 
+
+
+
+```{r}
+
+
+lfcs = c(0.58, 1)
+sigs = c(4,6,8,10)
+
+all_up = c()
+all_down = c()
+up_tags = c()
+down_tags = c()
+for(i in 1:length(lfcs))
+{
+  up_tag = paste0(lfcs[i],"_",
+                 sigs, "_up")
+  
+  up_names = paste0("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/HOMER_result/P5_P1/r",up_tag)
+  down_tag = paste0(lfcs[i],"_",
+                 sigs, "_down")
+  
+  down_names = paste0("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/HOMER_result/P5_P1/r",down_tag)
+ 
+  up_tags = c(up_tags, up_tag)
+  down_tags = c(down_tags, down_tag)
+  
+  all_up = c(all_up, up_names)
+  all_down = c(all_down, down_names)
+}
+
+
+```
+
+## up 
+```{r}
+
+
+
+res_list = vector(mode = "list", length = length(all_up))
+
+
+for(i in 1:length(all_up))
+{
+  kr = fread(paste0(all_up[i], "/knownResults.txt"), 
+             stringsAsFactors = F, data.table = F)
+  
+  colnames(kr)[1:5] = c("motif_name", "consensus", "pVal","log_pVal","qVal")
+  
+  kr_sel = kr[,1:5]%>%
+    dplyr::mutate(label = up_tags[i])%>%
+    dplyr::arrange(log_pVal)%>%
+    unique()%>%
+    dplyr::mutate(rank = row_number())
+
+  res_list[[i]] = kr_sel
+}
+
+
+```
+
+
+Find the motifs that are in consensus 
+
+```{r}
+
+joint_res = res_list%>%
+  Reduce(function(df1, df2) full_join(df1, df2, by = c("motif_name","consensus")), .)
+
+### find motifs that are signficant in at least one condition 
+
+qval_col = grep("qVal", colnames(joint_res))
+
+qval_mat = joint_res[,qval_col]
+qval_mins = apply(qval_mat, 1, min)
+motif_save = which(qval_mins<= 0.0001)
+
+save_res = joint_res[motif_save,]%>%
+  dplyr::mutate(sum_rank = rank.x + rank.y + rank.x.x + rank.y.y + rank.x.x.x + rank.y.y.y +
+                  rank.x.x.x.x + rank.y.y.y.y)%>%
+  dplyr::arrange(sum_rank)
+
+```
+
+get sig mat get score mat 
+
+```{r}
+save_q = save_res[, qval_col]
+
+sig_mat = matrix("", nrow = nrow(save_q), ncol = ncol(save_q))
+sig_mat[which(save_q <= 0.01)] = "*"
+
+rank_col = grep("rank", colnames(joint_res))
+
+save_score = save_res[, rank_col]
+```
+
+
+
+
+make a heatmap 
+
+
+
+
+```{r}
+
+library(gplots)
+library(RColorBrewer)
+
+par(mar=c(7,1,2,7)+0.1) 
+pdf("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/HOMER_result/P5_P1/up_rank_motif.pdf", 
+    height = 16, width = 7)
+
+heatmap.2(as.matrix(save_score), 
+          dendrogram = "none",
+          Colv = F, 
+          Rowv = F, 
+          trace = "none", 
+          labRow = gsub("\\/Homer", "",save_res$motif_name), 
+          labCol = up_tags,
+          cexRow = 0.6, 
+          breaks = seq(0,191, 1), 
+          col = colorRampPalette(c("red", "white"))(n = 191),
+          lhei = c(2,10),
+          margins=c(10,22),
+          notecol = "black", 
+          cellnote = sig_mat,
+          notecex = 0.5)
+
+
+dev.off()
+
+write.table(save_res, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/HOMER_result/P5_P1/common_sig_up_motif.tsv", 
+            quote = F, row.names = F, sep = "\t")
+
+
+```
+
+
+
+
+## down
+```{r}
+
+
+
+res_list = vector(mode = "list", length = length(all_down))
+
+
+for(i in 1:length(all_down))
+{
+  kr = fread(paste0(all_down[i], "/knownResults.txt"), 
+             stringsAsFactors = F, data.table = F)
+  
+  colnames(kr)[1:5] = c("motif_name", "consensus", "pVal","log_pVal","qVal")
+  
+  kr_sel = kr[,1:5]%>%
+    dplyr::mutate(label = down_tags[i])%>%
+    dplyr::arrange(log_pVal)%>%
+    unique()%>%
+    dplyr::mutate(rank = row_number())
+
+  res_list[[i]] = kr_sel
+}
+
+
+```
+
+
+Find the motifs that are in consensus 
+
+```{r}
+
+joint_res = res_list%>%
+  Reduce(function(df1, df2) full_join(df1, df2, by = c("motif_name","consensus")), .)
+
+### find motifs that are signficant in at least one condition 
+
+qval_col = grep("qVal", colnames(joint_res))
+
+qval_mat = joint_res[,qval_col]
+qval_mins = apply(qval_mat, 1, min)
+motif_save = which(qval_mins<= 0.0001)
+
+save_res = joint_res[motif_save,]%>%
+  dplyr::mutate(sum_rank = rank.x + rank.y + rank.x.x + rank.y.y + rank.x.x.x + rank.y.y.y +
+                  rank.x.x.x.x + rank.y.y.y.y)%>%
+  dplyr::arrange(sum_rank)
+
+```
+
+get sig mat get score mat 
+
+```{r}
+save_q = save_res[, qval_col]
+
+sig_mat = matrix("", nrow = nrow(save_q), ncol = ncol(save_q))
+sig_mat[which(save_q <= 0.01)] = "*"
+
+rank_col = grep("rank", colnames(joint_res))
+
+save_score = save_res[, rank_col]
+```
+
+
+
+
+make a heatmap 
+
+
+
+
+```{r}
+
+library(gplots)
+library(RColorBrewer)
+
+par(mar=c(7,1,2,7)+0.1) 
+pdf("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/HOMER_result/P5_P1/down_rank_motif.pdf", 
+    height = 18, width = 7)
+
+heatmap.2(as.matrix(save_score), 
+          dendrogram = "none",
+          Colv = F, 
+          Rowv = F, 
+          trace = "none", 
+          labRow = gsub("\\/Homer", "",save_res$motif_name), 
+          labCol = down_tags,
+          cexRow = 0.4, 
+          breaks = seq(0,191, 1), 
+          col = colorRampPalette(c("blue", "white"))(n = 191),
+          lhei = c(2,10),
+          margins=c(10,22),
+          notecol = "black", 
+          cellnote = sig_mat,
+          notecex = 0.5)
+
+
+dev.off()
+
+write.table(save_res, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/HOMER_result/P5_P1/common_sig_down_motif.tsv", 
+            quote = F, row.names = F, sep = "\t")
+
+
+```
+
+
+

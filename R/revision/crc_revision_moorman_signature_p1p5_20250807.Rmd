@@ -1,0 +1,109 @@
+---
+title: "crc_revision_moorman_signature_p1p5_20250807"
+output: html_document
+date: "2025-08-07"
+---
+
+
+```{r}
+library(readxl)
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(clusterProfiler)
+
+```
+
+read in supp table 
+
+
+```{r}
+stable = read_excel("/gstore/project/crc_metastasis/revision/2023-07-12062C-Supplementary_Table_4.xlsx", sheet = 1, 
+                    skip = 1)%>%
+  as.data.frame()%>%
+  dplyr::filter(Kept == TRUE)
+
+colnames(stable)[1] = "symbol"
+```
+
+basically make the gene set and perform GSEA 
+
+```{r}
+
+moorman_set = stable%>%
+  dplyr::select(Annotation, symbol)
+
+### map to mouse gene 
+
+library(igis)
+ig.mm <- Igis(species = "mouse", version = "4.0")
+ig.mm.gt <- data.frame(genes(ig.mm))
+ig.hg <- Igis(species = "human", version = "4.0")
+ig.hg.gt <- data.frame(genes(ig.hg))
+
+
+  sig.hg <- genesBySymbol(symbols = unique(stable$symbol), igis = ig.hg)
+  sig.hg.orth <- orthologs(geneIds = sig.hg$GeneID, toSpecies = "mouse",igis = ig.hg)
+  sig.mm.orth <- genesById(geneIds = sig.hg.orth$mmusculus_homolog_ensembl_gene, igis = ig.mm)
+
+  
+
+  moorman_set = data.frame(human_symbol = sig.hg.orth$Symbol, mouse_id = sig.hg.orth$mmusculus_homolog_ensembl_gene, stringsAsFactors = F)%>%
+    dplyr::left_join(data.frame(mouse_symbol = sig.mm.orth$Symbol, mouse_id =sig.mm.orth$GeneID,stringsAsFactors = F),
+                     by = "mouse_id")%>%
+    na.omit()%>%
+    dplyr::select(human_symbol, mouse_symbol)%>%
+    unique()%>%
+    dplyr::left_join(stable, by = c("human_symbol" = "symbol"))%>%
+    dplyr::select(Annotation, mouse_symbol)
+    
+
+
+
+
+library(clusterProfiler)
+
+
+res_df = fread("/gstore/project/crc_metastasis/P5_P1_revisit_20240801/res_P5_P1.tsv", stringsAsFactors = F, data.table = F)%>%
+  dplyr::arrange(symbol)
+
+
+geneList = res_df$t
+names(geneList) = res_df$symbol
+geneList = sort(geneList, decreasing = T)
+  
+
+set.seed(47382686)
+
+#y <- GSEA(geneList, TERM2GENE = qpaths, pvalueCutoff = 1, minGSSize = 4, maxGSSize = 700, seed = T)
+y <- GSEA(geneList, TERM2GENE = moorman_set, pvalueCutoff = 1, minGSSize = 4, maxGSSize = 700, seed = T)
+
+
+gsea_res = y@result%>%
+  dplyr::mutate(regulation = ifelse(NES>0, "up","down"))
+
+b= ggplot(gsea_res, aes(x = reorder(ID, NES),  y = NES, 
+                       color = regulation, 
+                       fill = sign(NES)*(-log10(p.adjust))))+
+  geom_bar(stat = "identity")+
+geom_text(
+    aes(label = sprintf("%.2g", p.adjust)),      # or formatC / scales::scientific
+    color = "black",
+    hjust = ifelse(gsea_res$NES > 0, 1, 0), # put text just outside the bar ends
+    size = 2)+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red")+
+  scale_color_manual(values = c("blue","red"))+
+  coord_flip()+
+  theme(axis.text.y = element_text(size = 5))+
+  theme_bw()+
+  labs(x = NULL)
+
+pdf_name = paste0("/gstore/project/crc_metastasis/P5_P1_revisit_20240801/revision_moorman_signatures_gsea_barplot.pdf")
+b
+ggsave(pdf_name, width = 7, height = 7)
+
+```
+
+
+

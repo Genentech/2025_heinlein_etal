@@ -1,0 +1,151 @@
+---
+title: "crc_revision_MAPK_allPassages_WES_20250805"
+output: html_document
+date: "2025-08-05"
+---
+
+
+for the MAPK genes get the mutation heatmap and allele frequency 
+
+
+```{r}
+
+library(data.table)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(VariantAnnotation)
+library(Vennerable)
+
+
+
+```
+
+
+Around MAPK genes 
+
+## readin MAPK genes 
+
+
+```{r}
+library(readxl)
+library(igis)
+
+
+mapk = read_excel("/gstore/home/lix335/resources/42003_2020_1552_MOESM4_ESM.xlsx",
+                  sheet = 1)%>%
+  as.data.frame()%>%
+  dplyr::select(Gene, Pathway)%>%
+  unique()%>%
+  dplyr::group_by(Gene)%>%
+  dplyr::summarise(pathway = paste(Pathway, collapse = "_"))
+
+
+
+ig.mm <- Igis(species = "mouse", version = "4.0")
+ig.mm.gt <- data.frame(genes(ig.mm))
+ig.hg <- Igis(species = "human", version = "4.0")
+ig.hg.gt <- data.frame(genes(ig.hg))
+
+
+  sig.hg <- genesBySymbol(symbols = unique(mapk$Gene), igis = ig.hg)
+  sig.hg.orth <- orthologs(geneIds = sig.hg$GeneID, toSpecies = "mouse",igis = ig.hg)
+  sig.mm.orth <- genesById(geneIds = sig.hg.orth$mmusculus_homolog_ensembl_gene, igis = ig.mm)
+
+  
+  
+### get a df with both human and mouse gene symbols 
+  
+
+  hg_mm_df = data.frame(human_symbol = sig.hg.orth$Symbol, mouse_id = sig.hg.orth$mmusculus_homolog_ensembl_gene, stringsAsFactors = F)%>%
+    dplyr::left_join(data.frame(mouse_symbol = sig.mm.orth$Symbol, mouse_id =sig.mm.orth$GeneID,stringsAsFactors = F),
+                     by = "mouse_id")%>%
+    na.omit()%>%
+    dplyr::select(human_symbol, mouse_symbol)%>%
+    unique()%>%
+    dplyr::left_join(mapk, by = c("human_symbol" = "Gene"))%>%
+    dplyr::filter(pathway!= "ERK5")
+
+
+
+
+```
+
+
+
+## gather the list of mutations of interest 
+
+
+```{r}
+
+samIDs = c("SAM24400842","SAM24400845","SAM24488704","SAM24488703","SAM24400853")
+ps = c("P1","P2","P3","P4","P5")
+
+
+indir.lst  = paste0("/gstore/data/genomics/congee_rest_runs/68377ab0f719730fbb8e88db/", samIDs,"/croo_output")
+cwd <- "/gstore/project/crc_metastasis/revision/P1P2P3P4P5_WES"
+grp <- "P0_2"
+
+results = readRDS( "/gstore/project/crc_metastasis/revision/P1P2P3P4P5_WES/results/NGS6581.P0_2.somatic_calls.rds")
+
+effects <- apply(results$SAM24488703[, c("CSQ.lofreq", "CSQ.strelka", "CSQ.mutect")], 1 , paste, collapse=" | ")
+effects.l <- strsplit(effects, " \\| ")
+sapply(seq_along(effects.l), function(i){
+  message(i)
+  x <- effects.l[[i]][grepl(",",effects.l[[i]])]
+  sapply(strsplit(x, ","), "[[", 2)
+}) %>% unlist() %>% table() %>% sort()
+
+effects.interest <- c("missense_variant", "NMD_transcript_variant", "frameshift_variant", "start_lost", "stop_gained")
+
+################
+# select results that only have the specific effects
+results.sel <- lapply(names(results), function(samid){
+  
+
+  r <- results[[samid]]
+
+  r$SAMID <- samid
+
+  effects <- apply(r[, c("CSQ.lofreq", "CSQ.strelka", "CSQ.mutect")], 1 , paste, collapse=" | ")
+  r$effects.merged  <- effects
+
+  r$use.effect <- sapply(seq_along(effects), function(i){
+    any(sapply(effects.interest, function(x){
+      grepl(x, effects[[i]])
+    })
+    )
+  })
+  
+  r$gene = gsub(",.*","", r$effects.merged)
+  r$gene = gsub("NA \\| ","", r$gene)
+
+  #r.sel <- r %>% filter(AF.mean > 0.39 & use.effect & n.methods > 1)
+  r.sel <- r %>% filter(gene %in% hg_mm_df$mouse_symbol & use.effect & n.methods > 1)
+
+  return(r.sel)
+})
+
+
+results.sel.bind <- do.call(rbind, results.sel)
+
+library(tidyverse)
+r <- results.sel.bind %>% dplyr::select(ID, effects.merged, SAMID, AF.mean) %>% unique()%>%spread(SAMID, AF.mean) %>%
+  mutate(AF.clonemean = rowMeans(dplyr::select(.,starts_with("SAM")), na.rm = TRUE),
+         n.AF.present = rowSums(!is.na(dplyr::select(.,starts_with("SAM"))))) %>%
+  arrange(desc(n.AF.present), desc(AF.clonemean))
+
+saveRDS(r, file.path(cwd, sprintf("results/NGS6581.%s.somatic_calls_summary_mapk_all.rds", grp)))
+
+
+```
+
+the conclusion is that there is only 1 MAPK gene somatic mutation which is Ywhab in SAM24400842
+so not worth showing the plot 
+> r
+               ID
+1 2:164015349_T/G
+                                                                                                                                                                                                                                                                                                                                                                                                                                                         effects.merged
+1 Ywhab,stop_gained,taT/taG,Y/*,543,181,ENSMUST00000018470,ENSMUSP00000018470 | Ywhab,downstream_gene_variant,,,,,ENSMUST00000131288,ENSMUSP00000117125 | Ywhab,stop_gained,taT/taG,Y/*,543,181,ENSMUST00000018470,ENSMUSP00000018470 | Ywhab,downstream_gene_variant,,,,,ENSMUST00000131288,ENSMUSP00000117125 | Ywhab,stop_gained,taT/taG,Y/*,543,181,ENSMUST00000018470,ENSMUSP00000018470 | Ywhab,downstream_gene_variant,,,,,ENSMUST00000131288,ENSMUSP00000117125
+  SAM24400842 AF.clonemean n.AF.present
+1   0.3004119    0.3004119            1

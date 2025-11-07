@@ -1,0 +1,489 @@
+---
+title: "crc_revision_invitro_bulkRNA_allPassage_20250620"
+output: html_document
+date: "2025-06-20"
+---
+
+source data from crc_invitro_RNA_emp1_pullout_20240925.Rmd
+
+NGS3655
+## load RNA
+```{r}
+library(data.table)
+library(dplyr)
+library(magrittr)
+
+
+vitro = fread("/gstore/project/crc_metastasis/inVitro/lcpm_20241030.tsv", stringsAsFactors = F, data.table = F)
+
+se = readRDS("/gstore/project/crc_metastasis/inVitro/se_20241030.rds")
+
+colD = colData(se)
+
+sel_cols = colD%>%
+  as.data.frame()%>%
+  dplyr::filter(Sample %in% c("SAM24400457","SAM24400458","SAM24400461","SAM24400465","SAM24400473","SAM24400481"))
+  #dplyr::filter(PATIENT_NUM %in% c("#4","#15","#176","#824","#484") | TREATMENT_NAME == "Parental")%>%
+  #dplyr::filter(PRIMARY_TISSUE %in% c("Liver", "Intestine Small"))
+
+
+write.table(sel_cols, "/gstore/project/crc_metastasis/inVitro/colData.tsv", 
+            quote = F, row.names = F, sep = "\t")
+
+vitro_sel = vitro[, c("symbol", sel_cols$Sample)]%>%
+  unique()
+
+```
+
+##retrieve MAPK genes from sinkala
+
+```{r}
+
+
+library(circlize)
+library(ComplexHeatmap)
+library(matrixStats)
+library(readxl)
+library(dplyr)
+library(magrittr)
+library(data.table)
+library(igis)
+
+
+mapk = read_excel("/gstore/home/lix335/resources/42003_2020_1552_MOESM4_ESM.xlsx",
+                  sheet = 1)%>%
+  as.data.frame()%>%
+  dplyr::select(Gene, Pathway)%>%
+  unique()%>%
+  dplyr::group_by(Gene)%>%
+  dplyr::summarise(pathway = paste(Pathway, collapse = "_"))
+
+
+
+ig.mm <- Igis(species = "mouse", version = "4.0")
+ig.mm.gt <- data.frame(genes(ig.mm))
+ig.hg <- Igis(species = "human", version = "4.0")
+ig.hg.gt <- data.frame(genes(ig.hg))
+
+
+  sig.hg <- genesBySymbol(symbols = unique(mapk$Gene), igis = ig.hg)
+  sig.hg.orth <- orthologs(geneIds = sig.hg$GeneID, toSpecies = "mouse",igis = ig.hg)
+  sig.mm.orth <- genesById(geneIds = sig.hg.orth$mmusculus_homolog_ensembl_gene, igis = ig.mm)
+
+  
+  
+### get a df with both human and mouse gene symbols 
+  
+
+  hg_mm_df = data.frame(human_symbol = sig.hg.orth$Symbol, mouse_id = sig.hg.orth$mmusculus_homolog_ensembl_gene, stringsAsFactors = F)%>%
+    dplyr::left_join(data.frame(mouse_symbol = sig.mm.orth$Symbol, mouse_id =sig.mm.orth$GeneID,stringsAsFactors = F),
+                     by = "mouse_id")%>%
+    na.omit()%>%
+    dplyr::select(human_symbol, mouse_symbol)%>%
+    unique()%>%
+    dplyr::left_join(mapk, by = c("human_symbol" = "Gene"))
+
+```
+
+
+```{r}
+
+sel_gex = hg_mm_df%>%
+  dplyr::left_join(vitro_sel, by = c("mouse_symbol" = "symbol"))%>%
+  dplyr::select(-human_symbol)%>%
+  dplyr::filter(pathway!= "ERK5")%>%
+  na.omit()%>%
+  dplyr::group_by(mouse_symbol, pathway)%>%
+  dplyr::summarise_if(is.numeric, mean, na.rm = T)%>%
+  dplyr::ungroup()%>%
+  as.data.frame()
+
+gex_mat =as.matrix(sel_gex[, c(3:8)])
+rownames(gex_mat) =sel_gex$mouse_symbol
+
+mapk_fam = sel_gex$pathway
+simp_fam = mapk_fam
+simp_fam[grepl("_", mapk_fam)] = "multi"
+
+
+
+#r_m = rowMeans(gex_mat)
+r_sd = rowSds(gex_mat)+0.1
+stan_expr = sweep(gex_mat, 1, gex_mat[,1])
+stan_expr = sweep(stan_expr, 1, r_sd, FUN = "/")
+
+
+col_fun_expr = colorRamp2(c(-2, 0, 2), c("blue","white", "red"))
+
+# Define row annotations with colors and text for chromosomes
+la = rowAnnotation(
+  pathway = simp_fam,
+  col = list(
+    pathway = c(
+      "ERK1/2" = "red4",
+      "JNK" = "darkgreen",
+      "P38" = "darkorange",
+      "multi" = "grey"
+    )
+  )
+)
+
+
+
+
+ta = HeatmapAnnotation(passage =c("P0","P1","P2","P3","P4","P5"),
+                        col = list(passage = c("P0" = "grey",
+                                               "P1" = "#2D8686",
+                                               "P2" = "lightblue",
+                                               "P3" = "gold",
+                                               "P4" = "darkorange", 
+                                               "P5" = "#862D2D")))
+
+h_cn = readRDS("/gstore/project/crc_metastasis/revision/P1P2P3P4P5_WES/heamap_cn.rds")
+
+
+### sort stan_expr so that it has the same order as h_cn
+sort_stan_expr = stan_expr[rownames(h_cn@matrix),]
+
+h1 = Heatmap(as.matrix(sort_stan_expr),
+             name = "norm.exp.",
+        col = col_fun_expr,
+        row_names_side = "right",
+        row_names_gp = gpar(fontsize = 4),
+        column_names_gp = gpar(fontsize = 7),
+        rect_gp = gpar(col = "black", lwd = 0.3),
+       #left_annotation = la, 
+       top_annotation = ta, 
+       cluster_rows = F, 
+       cluster_columns = F)
+
+h_cn + h1
+
+
+pdf("/gstore/project/crc_metastasis/revision/P1P2P3P4P5_WES/figures/mapk_sinkala_gene_CN_gex_heatmap_lf_noERK5_20250620.pdf", 
+    height = 10, width = 7,
+    useDingbats = F)
+ draw(h_cn + h1)
+ dev.off()
+
+```
+
+## Per Melanie's request produce a version with in vitro CN data and in vivo RNA data heatmap 
+
+
+```{r}
+
+library(circlize)
+library(ComplexHeatmap)
+library(matrixStats)
+library(readxl)
+library(dplyr)
+library(magrittr)
+library(data.table)
+library(igis)
+
+
+```
+
+### readin in vivo RNAseq data 
+need to take the intersect of invivo and in vitro gene names 
+need to do row wise clustering that looks tidier 
+
+
+
+```{r}
+
+
+expr = fread("/gstore/project/crc_metastasis/P5_P1_revisit_20240110/voom-results/filter_lcpm_expression_correct.tsv", 
+            stringsAsFactors = F, data.table = F)
+
+
+mapk_expr = hg_mm_df%>%
+  dplyr::left_join(expr, by = c("mouse_symbol" = "symbol"))%>%
+  dplyr::group_by(mouse_symbol,pathway)%>%
+  dplyr::summarise_if(is.numeric, mean, na.rm = T)%>%
+  as.data.frame()%>%
+  na.omit()%>%
+  dplyr::filter(pathway != "ERK5")
+
+
+
+
+res.cn = readRDS("/gstore/project/crc_metastasis/revision/P1P2P3P4P5_WES/controlFreeC/res.cn.rds")
+uni_cn = res.cn%>%
+  dplyr::select(-ID)%>%
+  unique()
+
+
+sel_cn = hg_mm_df%>%
+  dplyr::left_join(uni_cn, by = c("mouse_symbol" = "Symbol"))%>%
+  dplyr::select(-human_symbol)%>%
+  dplyr::filter(pathway!= "ERK5")
+
+gene_inter = intersect(mapk_expr$mouse_symbol, sel_cn$mouse_symbol)
+
+mapk_expr = mapk_expr%>%
+  dplyr::filter(mouse_symbol %in% gene_inter)
+
+
+expr_mat = as.matrix(mapk_expr[, c(3:9)])
+colnames(expr_mat) = colnames(mapk_expr)[3:9]
+rownames(expr_mat) = mapk_expr$mouse_symbol
+
+### standardize rowwise 
+r_m = rowMeans(expr_mat)
+r_sd = rowSds(expr_mat)
+stan_expr = sweep(expr_mat, 1, r_m)
+stan_expr = sweep(stan_expr, 1, r_sd, FUN = "/")
+
+col_fun_expr = colorRamp2(c(-2, 0, 2), c("blue","white", "red"))
+
+
+#### subset cn 
+
+
+library(biomaRt)
+ensembl = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+gene_info = getBM(attributes = c('mgi_symbol', 'chromosome_name'),
+                  filters = 'mgi_symbol',
+                  values = sel_cn$mouse_symbol,
+                  mart = ensembl)
+
+gene_info = rbind(gene_info, data.frame(mgi_symbol =c("Dupd1" ,"Dusp13"),
+                                        chromosome_name = c("14","14")))
+
+### manually add chr info for "Dupd1"  "Dusp13"
+
+sel_cn_chr = sel_cn%>%
+  dplyr::left_join(gene_info, by = c("mouse_symbol" = "mgi_symbol"))%>%
+  dplyr::select(mouse_symbol, chromosome_name, pathway, everything())%>%
+  na.omit()%>%
+  dplyr::filter(mouse_symbol %in% gene_inter)%>%
+  dplyr::arrange(factor(mouse_symbol, levels = mapk_expr$mouse_symbol))
+
+
+### categorise genes in different groups 
+chr17_gene = sel_cn_chr$mouse_symbol[which(sel_cn_chr$chromosome_name == "17")]
+chr5_gene = sel_cn_chr$mouse_symbol[which(sel_cn_chr$chromosome_name == "5")]
+chr15_gene = sel_cn_chr$mouse_symbol[which(sel_cn_chr$chromosome_name == "15")]
+chr6_gene = sel_cn_chr$mouse_symbol[which(sel_cn_chr$chromosome_name == "6")]
+chr18_gene = sel_cn_chr$mouse_symbol[which(sel_cn_chr$chromosome_name == "18")]
+chr19_gene = sel_cn_chr$mouse_symbol[which(sel_cn_chr$chromosome_name == "19")]
+increase_gene = sel_cn_chr$mouse_symbol[which(apply(sel_cn_chr[,4:8], 1, sum) >10 & sel_cn_chr$chromosome_name != "17"& sel_cn_chr$chromosome_name != "5" & sel_cn_chr$chromosome_name != "15"  & sel_cn_chr$chromosome_name != "6" & sel_cn_chr$chromosome_name != "18"  & sel_cn_chr$chromosome_name != "19")]
+decrease_gene = sel_cn_chr$mouse_symbol[which(apply(sel_cn_chr[,4:8], 1, sum) <10)]
+unchange_gene = sel_cn_chr$mouse_symbol[which(apply(sel_cn_chr[,4:8], 1, sum) ==10)]
+
+
+match_cn = sel_cn_chr%>%
+  dplyr::mutate(gcat = case_when(mouse_symbol %in% increase_gene ~ "increase", 
+                                 mouse_symbol %in% decrease_gene ~ "decrease", 
+                                 mouse_symbol %in% chr17_gene ~ "chr17", 
+                                 mouse_symbol %in% chr5_gene ~ "chr5", 
+                                 mouse_symbol %in% chr15_gene ~ "chr15", 
+                                 mouse_symbol %in% chr6_gene ~ "chr6", 
+                                 mouse_symbol %in% chr18_gene ~ "chr18", 
+                                 mouse_symbol %in% chr19_gene ~ "chr19",
+                                 T ~ "unchange"))
+
+row_order <- c()
+
+for(group in c( "chr5","chr17", "chr15","chr6","chr18","chr19", "increase",  "unchange", "decrease")) {
+  group_indices <- which(match_cn$gcat == group)
+  group_data <- stan_expr[group_indices, ]
+  
+  if (nrow(group_data) > 1) {
+    # Perform clustering for the group
+    group_dend <- hclust(dist(group_data))
+    ordered_indices <- group_indices[group_dend$order]
+  } else {
+    # If there's only one row in the group, use it as is
+    ordered_indices <- group_indices
+  }
+    row_order <- c(row_order, ordered_indices)
+}
+  
+
+match_cn_order = match_cn[row_order,]
+ordered_stan_expr = stan_expr[row_order, ]
+
+
+mapk_fam = match_cn_order$pathway
+simp_fam = mapk_fam
+simp_fam[grepl("_", mapk_fam)] = "multi"
+
+
+la = rowAnnotation(pathway = simp_fam,
+#                    mut_effect = muts$effect, 
+                col = list( pathway = c(
+      "ERK1/2" = "red4",
+      "JNK" = "darkgreen",
+      "P38" = "darkorange",
+      "multi" = "grey"
+    )))
+
+
+
+ta = HeatmapAnnotation(sample_cat =c(rep("P1",4), rep("P5",3)))
+# la = rowAnnotation(pathway = mapk_expr$pathway,
+#                   annotation_name_gp= gpar(fontsize = 5))
+
+h1 = Heatmap(as.matrix(ordered_stan_expr),
+             name = "standardized expression",
+        col = col_fun_expr,
+       # row_names_side = "left",
+        row_names_gp = gpar(fontsize = 4.5),
+        column_names_gp = gpar(fontsize = 4),
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        #left_annotation = la,
+        top_annotation = ta, 
+        cluster_rows = F, cluster_columns = F,
+        column_split = factor(c(rep("P1",4), rep("P5",3)), levels = c("P1", "P5")))
+
+
+res_df = fread("/gstore/project/crc_metastasis/P5_P1_revisit_20240801/res_P5_P1.tsv", stringsAsFactors = F, data.table = F)
+
+
+
+
+lf_df = rbindlist(lapply(1:nrow(match_cn_order), function(x) {
+  this_gene = match_cn_order$mouse_symbol[x]
+
+    gp15 = res_df%>%
+          dplyr::filter(symbol == this_gene)
+
+    
+  df = data.frame( symbol = match_cn_order$mouse_symbol[x],
+                   lf_p15 = NA, 
+                   fdr_p15 = NA, 
+                   sig_p15 = "",
+                  stringsAsFactors = F)
+   if(nrow(gp15) >0)
+  {
+        df$lf_p15 = gp15$LogFC[1]
+        df$fdr_p15 =  gp15$FDR[1]
+             if(gp15$FDR[1] <= 0.05)
+          df$sig_p15 = "*"
+
+  }
+  
+  return(df)
+  
+}))
+
+sig_mat = as.matrix(lf_df[,4])
+
+lf_mat = as.matrix(lf_df[,2])
+colnames(lf_mat) =  "P5vsP1"
+
+rownames(lf_mat) = lf_df$symbol
+
+col_fun = colorRamp2(c(-2, 0,2), c("blue", "white", "red"))
+
+
+
+
+h2 = Heatmap(as.matrix(lf_mat),
+             name = "Log2 FC",
+        col = col_fun,
+         cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%s", sig_mat[i, j]), x, y, gp = gpar(fontsize = 8))
+},
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        column_names_gp = gpar(fontsize = 4),
+        row_names_gp = gpar(fontsize = 5),
+        cluster_rows = F, cluster_columns = F)
+
+
+```
+
+
+
+```{r}
+
+
+cn_mat =as.matrix(match_cn_order[, c(4,5,8,7,6)])
+rownames(cn_mat) =match_cn_order$mouse_symbol
+
+mapk_fam = match_cn_order$pathway
+simp_fam = mapk_fam
+simp_fam[grepl("_", mapk_fam)] = "multi"
+
+
+#col_fun_af = colorRamp2(c(0, 2,4), c("darkblue", "white", "darkred"))
+
+col_fun_af = structure(c("darkblue", "white", "darkred"),
+                       names = c(1,2,3))
+
+# Define row annotations with colors and text for chromosomes
+# la = rowAnnotation(
+#   pathway = simp_fam,
+#   chromosome = anno_simple(match_cn_order$chromosome_name, pch = match_cn_order$chromosome_name, pt_size = unit(1, "mm")),
+#   col = list(
+#     pathway = c(
+#       "ERK1/2" = "red4",
+#       "JNK" = "darkgreen",
+#       "P38" = "darkorange",
+#       "multi" = "grey"
+#     )
+#   )
+# )
+
+
+set.seed(123)
+cclor = rainbow(length(unique(match_cn_order$chromosome_name)))
+
+
+la = rowAnnotation(
+  pathway = simp_fam,
+  chromosome = anno_simple(match_cn_order$chromosome_name, pch = match_cn_order$chromosome_name, pt_size = unit(1, "mm"),
+                          col = c( "17" = "#D2816B","15" = "#85EABA","6" = "#D3F575",
+                                   "1" =cclor[1], "2" = cclor[2], "3" = cclor[3], "4" = cclor[4],
+                                   "5" = cclor[5], "7" = cclor[7], "8" = cclor[8], "9" = cclor[9],
+                                   "10" = cclor[10], "11" = cclor[11], "12" = cclor[12], "13" = cclor[13],
+                                   "14" = cclor[14], "16" = cclor[16], "18" = cclor[18], "19" = cclor[19],
+                                   "X" = cclor[20])
+                           ),
+  col = list(
+    pathway = c(
+      "ERK1/2" = "darkslateblue",
+      "JNK" = "darkgreen",
+      "P38" = "darkorange",
+      "multi" = "grey"
+    )
+  )
+)
+
+
+ta = HeatmapAnnotation(passage =c("P1","P2","P3","P4","P5"),
+                        col = list(passage = c(
+                                               "P1" = "#2D8686",
+                                               "P2" = "lightblue",
+                                               "P3" = "gold",
+                                               "P4" = "darkorange", 
+                                               "P5" = "#862D2D")))
+
+
+h_cn = Heatmap(as.matrix(cn_mat),
+             name = "median gene CN",
+        col = col_fun_af,
+        row_names_side = "right",
+        row_names_gp = gpar(fontsize = 4),
+        column_names_gp = gpar(fontsize = 7),
+        rect_gp = gpar(col = "black", lwd = 0.3),
+       left_annotation = la, 
+       top_annotation = ta, 
+      cluster_rows = F, 
+       cluster_columns = F)
+
+
+
+pdf("/gstore/project/crc_metastasis/revision/P1P2P3P4P5_WES/figures/mapk_sinkala_gene_vitro_CN_vivo_gex_heatmap_lf_noERK5_20250714.pdf", 
+    height = 10, width = 8,
+    useDingbats = F)
+ draw(h_cn + h1 + h2)
+ dev.off()
+
+```
+
+

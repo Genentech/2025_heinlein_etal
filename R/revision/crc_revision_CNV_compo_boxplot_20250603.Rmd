@@ -1,0 +1,29 @@
+---
+title: "w"
+output: html_document
+date: "2025-06-03"
+---
+
+
+replot the percentage plot 
+
+the source data is from "/gstore/home/lix335/crc_metastatsis/crc_revision_controlFreeC_plotCNV.R"
+```{r}
+
+dat4plot.sel = readRDS("/gstore/project/crc_metastasis/revision/P1P2P3P4P5_WES/controlFreeC/cnv_dat4plot.sel.rds")
+
+pdf("/gstore/project/crc_metastasis/revision/P1P2P3P4P5_WES/controlFreeC/figures/cn_percentage_P12345.pdf")
+ggplot(dat4plot.sel, aes(x=model, y=alt.perc, fill=CNVtype)) + 
+  geom_bar(stat="identity") + 
+  ylab("% of genome alteration") + xlab('') + #labs(title = title) +
+  #scale_fill_discrete() +
+  scale_fill_manual(name="CNV type",values=rev(c("red", "blue", gray(.8)))) +
+  #scale_shape(name="Group") +
+  theme_bw() +
+  theme(text = element_text(size=18),
+        axis.text = element_text(size = 9),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+dev.off()
+
+```

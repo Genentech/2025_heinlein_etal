@@ -1,0 +1,243 @@
+---
+title: "crc_single_cell_revision_P1P5_honglin_20250715"
+output: html_document
+date: "2025-07-15"
+---
+
+
+process Honglin's single cell data and combine with our P1 P5 data and check for a few markers 
+
+
+
+
+## check data 
+```{r}
+
+library(SingleCellExperiment)
+library(DataSetDB)
+library(gp.sa.core)
+library(gp.sa.solo)
+library(scater)
+library(SingleR)
+library(UCell)
+library(dittoSeq)
+library(parallel)
+library(scran.chan)
+library(BiocParallel)
+library(celldex)
+library(dsassembly)
+ds = getDataset("DS000015552")
+se = ds[[1]]
+colD = colData(se)
+
+akps = se[,which(colD$assignment %in% c("AKPSFULLAPCorganoid_DMSO","AKPSFULLAPCorganoid_DOX") & colD$demux_type == "singlet")]
+colD_akps = colData(akps)
+### these are all singlets 
+
+table(colD_akps$Sample, colD_akps$assignment)
+```
+                  
+                   AKPSFULLAPCorganoid_DMSO AKPSFULLAPCorganoid_DOX
+  SAM24438240_rep1                     1879                     558
+  SAM24438240_rep2                     1962                     573
+  SAM24438240_rep3                     1971                     610
+  
+
+<!-- ```{r} -->
+<!-- hash = altExp(akps,"hashing") -->
+<!-- hash_assay = assay(hash) -->
+<!-- ``` -->
+
+
+<!-- ## assign cell type  -->
+<!-- ```{r} -->
+<!-- #  -->
+<!-- # counts <- assay(akps, "counts") -->
+<!-- # libsizes <- colSums(counts) -->
+<!-- # size.factors <- libsizes/mean(libsizes) -->
+<!-- # logcounts(akps) <- log2(t(t(counts)/size.factors) + 1) -->
+<!-- # assayNames(akps) -->
+
+
+<!-- library(scater) -->
+
+<!-- akps = logNormCounts(akps) -->
+
+<!-- library(scran) -->
+<!-- top.gene = getTopHVGs(akps, n = 2000) -->
+
+
+<!-- ``` -->
+
+
+
+
+
+## process with gp.sa.solo
+```{r}
+
+
+
+## Change the directory location as needed:
+proj.dir <- file.path("/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc/")
+
+
+
+newProject(proj.dir, title="colon_scRNA",
+           description="run basic gp.sa.solo pipeline, only singlets, 20250715")       
+setwd(proj.dir)
+
+rownames(akps) = rowData(akps)$Symbol
+mito = grep("mt-", rownames(akps))
+akps = addPerCellQCMetrics(akps, subsets = list(Mt = mito))
+akps = akps[, which(akps$subsets_Mt_percent <25)]
+
+
+output.akps <- runSingleCellBasic2(akps,
+                                  symbol.field = "Symbol",
+                                  qc.nmads = Inf, 
+                                  rand.seed = 123 )
+
+saveRDS(output.akps, "/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc/output.akps.rds")
+```
+
+
+```{r}
+dittoDimPlot(output.akps$sce, "cluster",
+             split.by = c("assignment","Sample"),
+             do.label = T, labels.size = 2, labels.highlight = F)
+```
+
+```{r}
+dittoDimPlot(output.akps$sce, "cluster",
+             split.by = "assignment",
+             do.label = T, labels.size = 2, labels.highlight = F)
+```
+```{r}
+
+dittoDimPlot(output.akps$sce, "Epcam", 
+             split.by = "assignment", size = 0.5, opacity = 0.5)+
+    scale_color_viridis_c()
+```
+
+
+```{r}
+dittoDimPlot(output.akps$sce, "cluster",
+             split.by = "Sample",
+             do.label = T, labels.size = 2, labels.highlight = F)
+```
+
+
+## annotate cluster 
+
+
+automatic annotation with singleR
+
+```{r}
+library(SingleR)
+
+imgen = ImmGenData()
+
+pred.main <- SingleR(test = output.akps$sce, ref = imgen, assay.type.test='logcounts',labels = colData(imgen)$label.main, clusters = colData(output.akps$sce)$cluster, BPPARAM = MulticoreParam(workers = 4))
+
+saveRDS(pred.main, "/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc/pred.main.Rds")
+
+w.m = max.col(pred.main$scores)
+max_label = colnames(pred.main$scores)[w.m]
+
+
+pred_df = data.frame(cluster = as.factor(c(1:11)), SingleR = max_label, stringsAsFactors = F )
+
+
+match_clu = data.frame(cluster = colData(output.akps$sce)$cluster, stringsAsFactors = F)%>%
+  dplyr::left_join(pred_df, by = "cluster")
+
+colData(output.akps$sce)$SingleR_max = match_clu$SingleR
+
+
+saveRDS(output.akps, "/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc/output.sce.cluster.SingleR.Rds")
+
+
+```
+
+
+No surprise that these are all annotated to be epithelial cells because they are pure tumor organoid 
+
+according to Honglin
+
+
+## combine with Liming's organoid data 
+
+
+```{r}
+library(zellkonverter)
+
+liming = readH5AD("/gstore/project/crc_metastasis/revision/data_agg_raw.h5ad")
+
+library(HDF5Array)
+out <- H5ADMatrix("/gstore/project/crc_metastasis/revision/data_agg_raw.h5ad")
+m_out = as.matrix(out)
+
+
+lim_sce =  SingleCellExperiment(list(counts=m_out),
+    colData=DataFrame(colData(liming)),
+    rowData=DataFrame(rowData(liming)))
+
+
+saveRDS(lim_sce, "/gstore/project/crc_metastasis/revision/singleCell_colon/liming_sce.rds")
+
+```
+
+
+## readin colon sc organoid data and combine 
+
+### these should all be epithellial cells 
+
+```{r}
+colon_sc = readRDS("/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc/output.sce.cluster.SingleR.Rds")
+colon_sce = colon_sc$sce
+
+lim_sce = readRDS("/gstore/project/crc_metastasis/revision/singleCell_colon/liming_sce.rds")
+# 
+# library(SingleCellExperiment)
+# 
+# output.merge <- gp.sa.solo2::runMerge(colon_sce, lim_sce)
+# ### the abov
+# 
+# library(scRNAseq)
+# sceG <- GrunPancreasData(ensembl=TRUE)
+# sceM <- MuraroPancreasData(ensembl=TRUE)
+# merged <- runMerge(sceM, sceG)
+
+
+proj.dir <- file.path("/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc_liming_merge/")
+
+
+
+newProject(proj.dir, title="colon_liming_scRNA",
+           description="run merge gp.sa.solo pipeline,liming's organoid and Honglin's organoid, 20250716")       
+setwd(proj.dir)
+
+output.merge <- runSingleCellMerge2(colon_sce,
+                                    lim_sce,
+                                    batch = "study",
+                                  rand.seed = 123 )
+### the above has a bug will work on the markdown file direclty 
+
+
+
+
+
+library(scRNAseq)
+sceZ <- ZeiselBrainData(ensembl=TRUE)
+sceT <- TasicBrainData(ensembl=TRUE)
+
+
+```
+
+
+
+
+
+
+

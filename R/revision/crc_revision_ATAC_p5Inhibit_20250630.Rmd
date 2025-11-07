@@ -1,0 +1,452 @@
+---
+title: "crc_revision_ATAC_p5Inhibit_20250630"
+output: html_document
+date: "2025-06-30"
+---
+NGS6729
+
+## create the config file for this data 
+```{r}
+
+library(data.table)
+library(dplyr)
+library(magrittr)
+library(DiffBind)
+
+samid = fread("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/ATAC_NGS6729_sample_corrected.csv", stringsAsFactors = F)
+
+config_df = data.frame(SampleID = samid$experiment_sample_id, condition = samid$experiment_group_name,
+                       Replicate = 1, stringsAsFactors = F)%>%
+  dplyr::mutate(Condition = gsub(" rep.*","", condition))%>%
+  dplyr::mutate(Replicate = rep(c(1,2,3), 6))%>%
+  dplyr::mutate(folder_name = gsub(" ","_", condition))%>%
+  dplyr::rowwise()%>%
+  dplyr::mutate(bamReads = list.files(path = paste0("/gstore/data/genomics/congee_rest_runs/6862b931c5899f40a6131d0e/",
+                                  folder_name, "/croo_output/align/rep1"),
+                                  pattern = "nodup.no_chrM_MT.bam$",
+                                  full.names = T))%>%
+  dplyr::mutate(Peaks =  list.files(path = paste0("/gstore/data/genomics/congee_rest_runs/6862b931c5899f40a6131d0e/",
+                                  folder_name, "/croo_output/peak/rep1"),
+                                  pattern = "bfilt.narrowPeak.gz$",
+                                  full.names = T))%>%
+  dplyr::mutate(PeakCaller = "narrowPeak")
+
+
+##
+write.table(config_df, "/gstore/home/lix335/crc_metastasis_ATAC/config.inhibitP5.csv", 
+            quote = F, row.names = F, sep = ",")
+
+
+
+```
+
+
+
+## Read in configuration file 
+
+```{r}
+
+
+atac = read.csv("/gstore/home/lix335/crc_metastasis_ATAC/config.inhibitP5.csv")
+
+crc = dba(sampleSheet = atac)
+
+plot(crc)
+
+```
+
+## apply black list 
+```{r}
+
+crc_filtered <- dba.blacklist(
+    crc,
+    blacklist = DBA_BLACKLIST_MM10,
+    greylist = FALSE
+)
+
+```
+
+
+## consensus peaks
+```{r}
+
+crc_filtered = dba.count(crc_filtered)
+saveRDS(crc_filtered, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/crc_afterCount.Rds")
+dba.show(crc_filtered)
+
+crc_filtered = readRDS("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/crc_afterCount.Rds")
+
+
+```
+
+## Normalization 
+
+```{r}
+
+crc_filtered_tmm = dba.normalize(crc_filtered, 
+                   normalize = DBA_NORM_TMM,
+                   method = DBA_DESEQ2)
+
+saveRDS(crc_filtered_tmm, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/crc_afterNorm_tmm.Rds")
+
+crc_filtered_tmm = readRDS("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/crc_afterNorm_tmm.Rds")
+
+dba.plotPCA(crc_filtered_tmm,DBA_CONDITION,label=DBA_CONDITION)
+```
+
+```{r}
+dba.plotPCA(crc_filtered_tmm,DBA_CONDITION,label=DBA_ID,labelSize = 0.4)
+
+```
+
+
+```{r}
+library(ggplot2)
+sample_df = crc_filtered_tmm$samples[,1:4]%>%
+  dplyr::mutate(librarySize = crc_filtered_tmm$norm$DESeq2$lib.sizes)
+
+ggplot(data =dba.show(crc_filtered_tmm), aes(x = Condition, y = Reads))+
+  geom_boxplot()
+```
+
+```{r}
+ggplot(data =dba.show(crc_filtered_tmm), aes(x = Condition, y = FRiP))+
+  geom_boxplot()
+```
+## try another normalization method to compare 
+
+
+```{r}
+
+crc_filtered_norm = dba.normalize(crc_filtered, 
+                   normalize = DBA_NORM_LIB)
+
+
+dba.plotPCA(crc_filtered_norm,DBA_CONDITION,label=DBA_CONDITION)
+```
+
+conclusion: very similar 
+
+## perform differential analysis 
+
+compare panobinstat to P5 and P1
+
+
+```{r}
+
+
+crc_filtered_tmm = dba.contrast(crc_filtered_tmm, contrast =c("Condition", "Panobinostat", "p5"))
+crc_filtered_tmm = dba.analyze(crc_filtered_tmm,
+                  method = DBA_DESEQ2,
+                  bBlacklist = F,
+                  bGreylist = F,
+                  bReduceObjects = F)
+
+dba.plotVolcano(crc_filtered_tmm)
+```
+
+```{r}
+pano_p5 = as.data.frame(dba.report(crc_filtered_tmm, th = 1, bCounts = T))
+write.table(pano_p5, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/crc_afterNorm_tmm_report_pano_p5.tsv",
+            quote = F, row.names = F, sep ="\t")
+
+```
+
+
+
+## compare pano with P1 
+
+
+
+```{r}
+
+
+crc_filtered_tmm = dba.contrast(crc_filtered_tmm, contrast =c("Condition", "Panobinostat", "p1"))
+crc_filtered_tmm = dba.analyze(crc_filtered_tmm,
+                  method = DBA_DESEQ2,
+                  bBlacklist = F,
+                  bGreylist = F,
+                  bReduceObjects = F)
+
+dba.plotVolcano(crc_filtered_tmm, contrast = 2)
+```
+
+
+
+```{r}
+pano_p1 = as.data.frame(dba.report(crc_filtered_tmm, contrast = 2,  th = 1, bCounts = T))
+write.table(pano_p1, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/crc_afterNorm_tmm_report_pano_p1.tsv",
+            quote = F, row.names = F, sep ="\t")
+
+```
+
+
+```{r}
+crc_filtered_tmm = dba.contrast(crc_filtered_tmm, contrast =c("Condition", "p5", "p1"))
+crc_filtered_tmm = dba.analyze(crc_filtered_tmm,
+                  method = DBA_DESEQ2,
+                  bBlacklist = F,
+                  bGreylist = F,
+                  bReduceObjects = F)
+
+
+dba.plotVolcano(crc_filtered_tmm, contrast = 1)
+p5_p1 = as.data.frame(dba.report(crc_filtered_tmm, contrast = 1,  th = 1, bCounts = T))
+write.table(p5_p1, "/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/crc_afterNorm_tmm_report_p5_p1.tsv",
+            quote = F, row.names = F, sep ="\t")
+```
+
+
+```{r}
+
+t =readRDS("/gstore/home/lix335/crc_metastasis_ATAC/crc1_filtered_afterDAR_tmm.Rds")
+
+```
+
+
+
+
+Just use the binding matrix 
+
+```{r}
+binding = crc_filtered_tmm$binding
+
+## run PCA on it 
+
+binding_mat = binding[, -c(1:3)]
+
+
+
+source("/gstore/home/lix335/random_scripts/scatter_plot_pca_tsn.R")
+
+col_code = data.frame(type = unique(crc_filtered_tmm$samples$Condition), 
+                      color = c("darkblue","maroon","skyblue", "grey","green","orange"))
+  
+  pc = prcomp(t(binding_mat), scale = T)
+  pc_v = pc$sdev/sum(pc$sdev)*100
+  pc_v = round(pc_v, 2)
+  
+  pc_df = data.frame(sample = colnames(binding_mat), 
+                     simp_name = crc_filtered_tmm$samples$SampleID,
+                     type = crc_filtered_tmm$samples$Condition,
+                     PC1 = pc$x[,1], PC2 = pc$x[,2], stringsAsFactors = F)
+  
+  
+  mark_t = as.data.frame(table(pc_df$type))%>%
+    dplyr::left_join(col_code, by = c("Var1" = "type"))%>%
+    dplyr::arrange(Var1)
+  
+  
+  wid = max(pc_df$PC1) - min(pc_df$PC1)
+  hei = max(pc_df$PC2) - min(pc_df$PC2)
+  
+  
+  p = ggplot(pc_df, aes(PC1,PC2))+
+    geom_point(aes(color = type),
+               size = 2) +
+    scale_colour_manual(values=mark_t$color, name = "", labels = mark_t$Var1)+
+    geom_text_repel(data = pc_df, aes(PC1, PC2, label = simp_name),
+                    size = 2,
+                    segment.size = 0.3,
+                    segment.alpha = 0.3,
+                    force = 4,
+                    max.overlaps = Inf,
+                    box.padding = unit(0.35, "lines"),
+                    point.padding = unit(0.3, "lines"),
+                    seed = 123)+
+    theme_bw()+
+    theme(text = element_text(size=7)) +
+    coord_fixed(ratio = wid/hei)+
+    ggtitle("PCA on binding matrix crc_filtered_tmm")+
+    labs(x= paste0("PC1 ", pc_v[1], "%"),
+         y = paste0("PC2 ", pc_v[2], "%"))
+  
+  ### save 
+  p
+  ggsave("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA/pca_plot_PC12_samID.pdf")
+  
+  
+  
+  
+  
+  
+  wid = max(pc_df$PC1) - min(pc_df$PC1)
+  hei = max(pc_df$PC2) - min(pc_df$PC2)
+  
+  
+  p1 = ggplot(pc_df, aes(PC1,PC2))+
+    geom_point(aes(color = type),
+               size = 2) +
+    scale_colour_manual(values=mark_t$color, name = "", labels = mark_t$Var1)+
+    geom_text_repel(data = pc_df, aes(PC1, PC2, label = type),
+                    size = 2,
+                    segment.size = 0.3,
+                    segment.alpha = 0.3,
+                    force = 4,
+                    max.overlaps = Inf,
+                    box.padding = unit(0.35, "lines"),
+                    point.padding = unit(0.3, "lines"),
+                    seed = 123)+
+    theme_bw()+
+    theme(text = element_text(size=7)) +
+    coord_fixed(ratio = wid/hei)+
+    ggtitle("PCA on binding matrix crc_filtered_tmm")+
+    labs(x= paste0("PC1 ", pc_v[1], "%"),
+         y = paste0("PC2 ", pc_v[2], "%"))
+  
+  ### save 
+  p1
+  ggsave("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA/pca_plot_PC12_type.pdf")
+  
+  
+  
+  
+  pc_df2 = data.frame(sample = colnames(binding_mat), 
+                     simp_name = crc_filtered_tmm$samples$SampleID,
+                     type = crc_filtered_tmm$samples$Condition,
+                     PC1 = pc$x[,1], PC3 = pc$x[,3], stringsAsFactors = F)
+  
+  
+  
+  
+  wid = max(pc_df2$PC1) - min(pc_df2$PC1)
+  hei = max(pc_df2$PC3) - min(pc_df2$PC3)
+  
+  
+  p2 = ggplot(pc_df2, aes(PC1,PC3))+
+    geom_point(aes(color = type),
+               size = 2) +
+    scale_colour_manual(values=mark_t$color, name = "", labels = mark_t$Var1)+
+    geom_text_repel(data = pc_df2, aes(PC1, PC3, label = simp_name),
+                    size = 2,
+                    segment.size = 0.3,
+                    segment.alpha = 0.3,
+                    force = 4,
+                    max.overlaps = Inf,
+                    box.padding = unit(0.35, "lines"),
+                    point.padding = unit(0.3, "lines"),
+                    seed = 123)+
+    theme_bw()+
+    theme(text = element_text(size=7)) +
+    coord_fixed(ratio = wid/hei)+
+    ggtitle("PCA on binding matrix crc_filtered_tmm")+
+    labs(x= paste0("PC1 ", pc_v[1], "%"),
+         y = paste0("PC3 ", pc_v[3], "%"))
+  
+```
+
+understand the PCs 
+```{r}
+pc1_rotation = pc$rotation[,1]
+pc2_rotation = pc$rotation[,2]
+pc3_rotation = pc$rotation[,3]
+
+### use the top 3000 positive and negative valuaad peaks 
+
+get_top_peaks = function(rotation, topN, file_tag = "pc1")
+{
+  # 
+  # rotation = pc1_rotation
+  # topN = 3000
+  # file_tag = "pc1"
+  
+  
+  df = data.frame(binding[,1:3], pc = rotation, stringsAsFactors = F)%>%
+    dplyr::mutate(strand = "*")%>%
+    dplyr::mutate(seqnames = paste0("chr",CHR), start = as.integer(START), end = as.integer(END))
+    
+  
+  bg_peaks = df%>%
+    dplyr::mutate(ID = paste(seqnames, start, end, sep = "_"))%>%
+    dplyr::mutate(notused = "")%>%
+    dplyr::select(seqnames, start, end, ID, notused, strand)
+  
+  
+  write.table(bg_peaks, paste0("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA/", file_tag,"_bg_peak.bed"),
+              quote = F, row.names = F, col.names = F, sep = "\t")
+  
+  
+    
+    sel_up = df%>%
+      dplyr::arrange(desc(pc))%>%
+      dplyr::top_n(topN, pc)%>%
+      dplyr::mutate(ID = paste(seqnames, start, end, sep = "_"))%>%
+      dplyr::mutate(notused = "")%>%
+      dplyr::select(seqnames, start, end, ID, notused, strand)
+    
+    tag = paste0(file_tag,"_", topN, "_up")
+    
+    write.table(sel_up, paste0("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA/", tag,"_peak.bed"),
+                quote = F, row.names = F, col.names = F, sep = "\t")
+    
+    
+      
+    sel_down = df%>%
+      dplyr::arrange(desc(pc))%>%
+      dplyr::top_n(-topN, pc)%>%
+      dplyr::mutate(ID = paste(seqnames, start, end, sep = "_"))%>%
+      dplyr::mutate(notused = "")%>%
+      dplyr::select(seqnames, start, end, ID, notused, strand)
+    
+    tag = paste0(file_tag,"_", topN, "_down")
+    
+    write.table(sel_down, paste0("/gstore/project/crc_metastasis/revision/P5_inhibit_ATAC/PCA/", tag,"_peak.bed"),
+                quote = F, row.names = F, col.names = F, sep = "\t")
+  
+  
+}
+
+
+get_top_peaks(rotation = pc1_rotation,
+              topN = 3000,
+              file_tag = "pc1")
+
+
+get_top_peaks(rotation = pc2_rotation,
+              topN = 3000,
+              file_tag = "pc2")
+
+
+get_top_peaks(rotation = pc3_rotation,
+              topN = 3000,
+              file_tag = "pc3")
+
+
+get_top_peaks(rotation = pc1_rotation,
+              topN = 5000,
+              file_tag = "pc1")
+
+
+get_top_peaks(rotation = pc2_rotation,
+              topN = 5000,
+              file_tag = "pc2")
+
+
+get_top_peaks(rotation = pc3_rotation,
+              topN = 5000,
+              file_tag = "pc3")
+
+
+get_top_peaks(rotation = pc1_rotation,
+              topN = 7000,
+              file_tag = "pc1")
+
+
+get_top_peaks(rotation = pc2_rotation,
+              topN = 7000,
+              file_tag = "pc2")
+
+
+get_top_peaks(rotation = pc3_rotation,
+              topN = 7000,
+              file_tag = "pc3")
+
+
+
+```
+
+
+
+
+
+

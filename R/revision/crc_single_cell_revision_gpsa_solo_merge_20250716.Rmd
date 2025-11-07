@@ -1,0 +1,451 @@
+---
+title: "crc_single_cell_revision_merge_20250716"
+output: html_document
+date: "2025-07-16"
+---
+
+# load data 
+
+```{r}
+library(SummarizedExperiment)
+library(SingleCellExperiment)
+library(gp.sa.solo)
+
+
+colon_sc = readRDS("/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc/output.sce.cluster.SingleR.Rds")
+colon_sce = colon_sc$sce
+
+lim_sce = readRDS("/gstore/project/crc_metastasis/revision/singleCell_colon/liming_sce.rds")
+# 
+all.inputs = list()
+
+all.inputs[["1"]] = colon_sce
+all.inputs[["2"]] = lim_sce
+
+
+common <- lapply(all.inputs, rownames)
+common <- Reduce(intersect, common)
+length(common)
+
+
+all.inputs <- lapply(all.inputs, function(x) x[common,])
+sce <- do.call(combineCols, unname(all.inputs))
+colData(sce)[["study"]] <- rep(names(all.inputs), vapply(all.inputs, ncol, 0L))
+sce
+
+
+```
+
+
+# Run analysis 
+
+## initialize 
+```{r}
+library(scran.chan)
+x <- initializeSparseMatrix(assay(sce, 1), num.threads = 1)
+batch <- colData(sce)[["study"]]
+table(batch)
+```
+
+## QC 
+
+```{r}
+
+is.mito <- hasSeqnames(rowRanges(sce), c('MT', 'M', 'chrM', 'chrMT'))
+summary(is.mito)
+
+qc.metrics <- perCellQCMetrics.chan(x, 
+    subsets = list(mito = is.mito), 
+    num.threads = 1)
+
+deets <- data.frame(
+    sums = qc.metrics$sums,
+    detected = qc.metrics$detected,
+    mito = qc.metrics$subsets$mito,
+    batch = factor(batch)
+)
+head(deets)
+
+
+
+qc.filters <- perCellQCFilters.chan(
+    sums = qc.metrics$sums, 
+    detected = qc.metrics$detected, 
+    subsets = qc.metrics$subsets,
+    nmads = 3,
+    batch = batch
+)
+qc.filters$thresholds
+qc.discard <- qc.filters$filters$overall
+summary(qc.discard)
+
+
+
+library(ggplot2)
+thresholds <- data.frame(
+    batch = levels(factor(batch)),
+    sums = qc.filters$thresholds$sums,
+    detected = qc.filters$thresholds$detected,
+    mito = qc.filters$thresholds$subsets$mito
+)
+
+ggplot(deets) + 
+    geom_violin(aes(x=batch, fill=batch, y=log10(sums + 1))) + 
+    ylab("Log[10](Total sum of counts)") +
+    geom_point(aes(x=batch, y=log10(sums + 1)), data=thresholds, pch=4, cex=5) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggplot(deets) + 
+    geom_violin(aes(x=batch, fill=batch, y=log10(detected + 1))) + 
+    ylab("Log[10](Number of detected genes)") +
+    geom_point(aes(x=batch, y=log10(detected + 1)), data=thresholds, pch=4, cex=5) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggplot(deets) + 
+    geom_violin(aes(x=batch, fill=batch, y=mito)) + 
+    ylab("Proportion of mitochondrial coverage") +
+    geom_point(aes(x=batch, y=mito), data=thresholds, pch=4, cex=5) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+```{r}
+
+filtered <- filterCells.chan(x, qc.discard)
+batch2 <- batch[!qc.discard]
+
+```
+
+## normalization 
+
+```{r}
+lib.sizes <- qc.metrics$sums[!qc.discard]
+normed <- logNormCounts.chan(filtered, lib.sizes, batch=batch2)
+sf <- normed$size.factors
+sfdf <- data.frame(batch=factor(batch2), size_factors=sf)
+ggplot(sfdf) + 
+    geom_violin(aes(x=batch, fill=batch, y=log10(sf))) + 
+    ylab("Log[10](Size factor)")
+```
+
+## variance modelling 
+
+```{r}
+variances <- modelGeneVar.chan(normed, batch = batch2, num.threads = 1)
+per.batch <- variances$per.batch
+variances <- variances$statistics
+head(variances)
+
+keep <- rank(-variances$residuals, ties.method = "first") <= 2000
+summary(keep) 
+````
+
+
+```{r}
+for (i in seq_along(per.batch)) {
+    cat("\n\n### Batch", i, " {-}\n")
+
+    current <- per.batch[[i]]
+    plot(current$means, current$variances, xlab="Mean", ylab="Variance", col=factor(keep)) 
+    o <- order(current$means)
+    lines(current$means[o], current$fitted[o], col="dodgerblue", lwd=2)
+}
+
+```
+
+## PCA 
+
+
+```{r}
+
+
+pca <- runPCA.chan(normed, 
+    num.comp = 25, 
+    subset = keep, 
+    batch = batch2, 
+    batch.method = "weight", 
+    num.threads = 1)
+
+plot(cumsum(pca$prop.variance), ylab="Variance explained", xlab="PC number", type="l")
+
+
+pcs <- pca$components
+dim(pcs)
+```
+
+
+## batch correction 
+
+```{r}
+mnn <- mnnCorrect.chan(pcs, 
+    batch = batch2, 
+    k = 15, 
+    order = NULL,
+    reference.policy = "max-rss",
+    approximate = TRUE,
+    num.threads = 1,
+    mass.cap = NULL)
+
+corrected <- mnn$corrected
+dim(corrected)
+```
+
+
+```{r}
+mnn$merge.order
+
+```
+
+## clustering and visualization 
+
+
+```{r}
+downstream.out <- runAllDownstream(corrected, 
+    do.tsne = TRUE,
+    do.umap = TRUE,
+    do.cluster.kmeans = FALSE,
+    do.cluster.snn = TRUE,
+    tsne.perplexity = 30,
+    umap.num.neighbors = 15,
+    cluster.kmeans.k = 10,
+    cluster.snn.method = "multilevel",
+    cluster.snn.num.neighbors = 10,
+    cluster.snn.resolution = NULL,
+    num.threads = 1,
+    approximate = TRUE,
+    downsample = NULL)
+names(downstream.out)
+```
+
+
+### UMAP 
+```{r}
+chosen.clusters <- downstream.out$cluster.snn$membership
+table(chosen.clusters)
+
+library(ggplot2)
+df <- data.frame(
+    UMAP1=downstream.out$umap[,1], 
+    UMAP2=downstream.out$umap[,2], 
+    cluster=factor(chosen.clusters),
+    batch=factor(batch2)
+ggplot(df) + geom_point(aes(x=UMAP1, y=UMAP2, color=cluster), alpha=0.5)
+ggplot(df) + geom_point(aes(x=UMAP1, y=UMAP2, color=batch), alpha=0.1)
+```
+
+## marker detection 
+
+```{r}
+
+markers <- scoreMarkers.chan(
+    normed, 
+    chosen.clusters, 
+    batch = batch2, 
+    lfc = 0,
+    num.threads = 1
+)
+markers <- markers$statistics
+names(markers)
+head(markers[[1]])
+```
+
+top 20 
+
+```{r}
+
+mean.mat <- lapply(markers, function(x) x$mean[match(rownames(sce), rownames(x))])
+mean.mat <- do.call(cbind, mean.mat)
+rownames(mean.mat) <- rownames(sce)
+
+library(pheatmap)
+for (n in names(markers)) {
+    current <- head(markers[[n]], 20)
+    chosen <- rownames(current)
+    chosen <- match(chosen, rownames(mean.mat))
+    effects <- mean.mat[chosen,,drop=FALSE]
+    effects <- effects - rowMeans(effects, na.rm=TRUE)
+
+    cat("\n\n### ", n, " {-}\n")
+
+    # Making the heatmap and annotating the current cluster: 
+    pheatmap(effects, 
+        breaks=seq(-3, 3, length.out=101),
+        main=paste('Cluster', n),
+        annotation_col=data.frame(
+            current=as.character(colnames(effects)==n), 
+            row.names=colnames(effects)
+        ),
+        annotation_colors=list(current=c(`TRUE`='grey20', `FALSE` = 'grey80')))
+}
+```
+
+```{r}
+
+
+merged <- sce[,!qc.discard]
+merged$sums <- qc.metrics$sums[!qc.discard]
+merged$detected <- qc.metrics$detected[!qc.discard]
+merged$mito_prop <- qc.metrics$subsets$mito[!qc.discard]
+
+merged$batch <- batch2
+sizeFactors(merged) <- sf
+ass <- assay(merged, 1)
+library(DelayedArray)
+assay(merged, "logcounts") <- log1p(t(t(DelayedArray(ass))/sf))/log(2)
+
+reducedDim(merged, "PCA") <- t(pcs)
+reducedDim(merged, "MNN") <- t(corrected)
+reducedDim(merged, "TSNE") <- downstream.out$tsne
+reducedDim(merged, "UMAP") <- downstream.out$umap
+
+merged$cluster <- chosen.clusters
+merged$cluster.snn <- downstream.out$cluster.snn$membership
+
+
+
+base::saveRDS(merged, "/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc_liming_merge/merged.rds")
+
+
+library(dittoSeq)
+merged$cell = "small_intestine"
+merged$cell[which(merged$batch == "1")] = "colon"
+merged$type = paste0(merged$cell, "_", merged$assignment,"_",merged$SampleType)
+
+dittoDimPlot(merged, "cluster",
+             split.by = "type",
+             do.label = T, labels.size = 2, labels.highlight = F)
+
+
+```
+
+```{r}
+
+raw.agg <- aggregateAcrossCells.chan(filtered, 
+    colData(merged)[,c("cluster", "batch")],
+    num.threads=1)
+
+# Cluster and batch are automatically added in uniquifyGroupedDataFrame.
+pseudo.bulk <- SingleCellExperiment(list(counts=raw.agg$sums),
+    colData=uniquifyGroupedDataFrame(colData(merged), raw.agg$index),
+    rowData=rowData(sce))
+pseudo.bulk$ncells <- raw.agg$counts
+
+pseudo.bulk <- PseudoBulkExperiment(pseudo.bulk, variable.fields='cluster', sample.field='batch', 
+    description='Pseudo-bulk summation of merged and clustered single-cell experiments.')
+pseudo.bulk
+
+saveRDS(pseudo.bulk, "/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc_liming_merge/pseudo.bulk.rds")
+
+```
+
+
+```{r}
+merged = readRDS("/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc_liming_merge/merged.rds")
+
+
+library(dittoSeq)
+merged$cell = "small_intestine"
+merged$cell[which(merged$batch == "1")] = "colon"
+merged$type = paste0(merged$cell, "_", merged$assignment,"_",merged$SampleType)
+
+
+
+
+dittoDimPlot(merged, "cluster",
+             do.label = T, labels.size = 2, labels.highlight = F)
+
+dittoDimPlot(merged, "cluster",
+             split.by = "type",
+             do.label = T, labels.size = 2, labels.highlight = F,
+             split.ncol = 2)
+
+
+dittoDimPlot(merged, "Apc",
+             labels.size = 2, labels.highlight = F, order = "increasing")+
+      scale_color_viridis_c()
+
+dittoDimPlot(merged, "Apc",
+             labels.size = 2, labels.highlight = F, order = "increasing",
+             split.by = "type",
+             split.ncol = 2)+
+      scale_color_viridis_c()
+
+
+```
+
+
+
+## Plot the Wnt and MAPK scores 
+
+```{r}
+library(UCell)
+
+
+f_df = fread("/gstore/home/lix335/crc_metastasis_ATAC/motif_peak_BETA_network/top6_spacer_leftcf_motifs_signature_highEdge_sets8_merge_sig0.0001_20241103.tsv", 
+             stringsAsFactors = F)
+
+
+
+mlist = c("Spred1","Spred2", "Ets","Spry2", "Spry4", "Etv1", "Etv4", "Etv6", "Dusp4","Dusp6")
+wlist = c("Lgr5", "Axin2", "Ascl2", "Slc12a2", "Gkn33p", "Nkd1", "Wif1", "Smoc2")
+
+
+signatures = list(mapk_mandy = mlist ,
+                  wnt_canonical = wlist,
+                  p1_wnt = f_df$gene[which(f_df$set == "p1_wnt")],
+                  p5_mapk =f_df$gene[which(f_df$set == "p5_mapk")] )
+
+exp.mat = logcounts(merged)
+u.scores <- ScoreSignatures_UCell(as.matrix(exp.mat), features = signatures, maxRank = 2500)
+
+if(typeof(u.scores) == "double"){
+  scores.ucell <- u.scores %>% data.frame()
+}else{
+  scores.ucell <- assay(altExp(u.scores), "UCell") %>% t() %>% data.frame() 
+}
+
+colData(merged) <- cbind(colData(merged), scores.ucell)
+
+
+saveRDS(merged, "/gstore/project/crc_metastasis/revision/singleCell_colon/colon_sc_liming_merge/merged.rds")
+
+
+
+dittoDimPlot(merged, "mapk_mandy_UCell",
+             labels.size = 2, labels.highlight = F, order = "increasing")+
+      scale_color_viridis_c()
+
+dittoDimPlot(merged, "mapk_mandy_UCell",
+             labels.size = 2, labels.highlight = F, order = "increasing",
+             split.by = "type",
+             split.ncol = 2)+
+      scale_color_viridis_c()
+
+
+
+dittoDimPlot(merged, "wnt_canonical_UCell",
+             labels.size = 2, labels.highlight = F, order = "increasing",
+             split.by = "type",
+             split.ncol = 2)+
+      scale_color_viridis_c()
+
+
+dittoDimPlot(merged, "p5_mapk_UCell",
+             labels.size = 2, labels.highlight = F, order = "increasing",
+             split.by = "type",
+             split.ncol = 2)+
+      scale_color_viridis_c()
+
+
+
+dittoDimPlot(merged, "p1_wnt_UCell",
+             labels.size = 2, labels.highlight = F, order = "increasing",
+             split.by = "type",
+             split.ncol = 2)+
+      scale_color_viridis_c()
+
+```
+
+
+
+
