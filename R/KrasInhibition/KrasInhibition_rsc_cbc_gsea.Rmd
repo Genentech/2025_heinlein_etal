@@ -1,0 +1,82 @@
+---
+title: "KrasInhibition_rsc_cbc_gsea"
+output: html_document
+date: "2025-11-13"
+---
+
+barplot to show rsc and cbc signatures 
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+```
+
+
+
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(ggplot2)
+library(patchwork)
+
+
+gres_3 = readRDS("data/KrasInhibition/gsea_res_3d_vs_Veh.rds")
+gres_14 = readRDS("data/KrasInhibition/gsea_res_14d_vs_Veh.rds")
+
+
+
+b_3d= ggplot(gres_3, aes(x = reorder(ID, NES),  y = NES, 
+                       color = regulation, 
+                       fill = sign(NES)*(-log10(p.adjust))))+
+  geom_bar(stat = "identity")+
+  geom_text(
+    aes(label = sprintf("%.2g", p.adjust)),      # or formatC / scales::scientific
+    color = "black",
+    hjust = ifelse(gres_3$NES > 0, 1, 0), # put text just outside the bar ends
+    size = 2)+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red")+
+  scale_color_manual(values = c("blue","red"))+
+  coord_flip()+
+  theme(axis.text.y = element_text(size = 5))+
+  theme_bw()+
+  ggtitle("3D vs Veh")+
+  labs(x = NULL)
+
+b_3d
+
+```
+
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+
+b_14d= ggplot(gres_14, aes(x = reorder(ID, NES),  y = NES, 
+                       color = regulation, 
+                       fill = sign(NES)*(-log10(p.adjust))))+
+  geom_bar(stat = "identity")+
+  geom_text(
+    aes(label = sprintf("%.2g", p.adjust)),      # or formatC / scales::scientific
+    color = "black",
+    hjust = ifelse(gres_14$NES > 0, 1, 0), # put text just outside the bar ends
+    size = 2)+
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red")+
+  scale_color_manual(values = c("blue","red"))+
+  coord_flip()+
+  theme(axis.text.y = element_text(size = 5))+
+  theme_bw()+
+  ggtitle("16D vs Veh")+
+  labs(x = NULL)
+
+
+b_14d
+
+```
+
+
+```{r}
+sessionInfo()
+```

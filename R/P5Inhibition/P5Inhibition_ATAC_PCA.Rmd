@@ -6,9 +6,24 @@ date: "2025-11-13"
 
 
 
-# read in data 
+make PCA for P5Inhibition ATAC seq data 
 
-```{r}
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+```
+
+
+
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+
+
 library(ggplot2)
 library(ggrepel)
 library(data.table)
@@ -23,7 +38,7 @@ pc_df = readRDS("data/P5Inhibition/pca_df.rds")
 
 
 
-col_code = data.frame(type = unique(crc_filtered_tmm$samples$Condition), 
+col_code = data.frame(type =c("p5","A485","EPZ004777", "RG108", "p1","Panobinostat"), 
                       color = c("darkblue","maroon","skyblue", "grey","green","orange"))
 
 
@@ -52,11 +67,16 @@ col_code = data.frame(type = unique(crc_filtered_tmm$samples$Condition),
     theme_bw()+
     theme(text = element_text(size=7)) +
     coord_fixed(ratio = wid/hei)+
-    ggtitle("PCA on binding matrix crc_filtered_tmm")+
-    labs(x= paste0("PC1 ", pc_v[1], "%"),
-         y = paste0("PC2 ", pc_v[2], "%"))
+    ggtitle("PCA on binding matrix crc_filtered_tmm")
   
   p1
   
   
+```
+
+
+
+```{r}
+sessionInfo()
+
 ```
