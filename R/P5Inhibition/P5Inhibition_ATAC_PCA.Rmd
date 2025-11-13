@@ -1,0 +1,62 @@
+---
+title: "P5Inhibition_ATAC_PCA"
+output: html_document
+date: "2025-11-13"
+---
+
+
+
+# read in data 
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(data.table)
+library(dplyr)
+library(magrittr)
+source("R/P5Inhibition/scatter_plot_pca_tsn.R")
+
+
+setwd("/gstore/project/crc_metastasis/gitCode/")
+pc_df = readRDS("data/P5Inhibition/pca_df.rds")
+
+
+
+
+col_code = data.frame(type = unique(crc_filtered_tmm$samples$Condition), 
+                      color = c("darkblue","maroon","skyblue", "grey","green","orange"))
+
+
+  mark_t = as.data.frame(table(pc_df$type))%>%
+    dplyr::left_join(col_code, by = c("Var1" = "type"))%>%
+    dplyr::arrange(Var1)
+  
+
+  wid = max(pc_df$PC1) - min(pc_df$PC1)
+  hei = max(pc_df$PC2) - min(pc_df$PC2)
+  
+  
+  p1 = ggplot(pc_df, aes(PC1,PC2))+
+    geom_point(aes(color = type),
+               size = 2) +
+    scale_colour_manual(values=mark_t$color, name = "", labels = mark_t$Var1)+
+    geom_text_repel(data = pc_df, aes(PC1, PC2, label = type),
+                    size = 2,
+                    segment.size = 0.3,
+                    segment.alpha = 0.3,
+                    force = 4,
+                    max.overlaps = Inf,
+                    box.padding = unit(0.35, "lines"),
+                    point.padding = unit(0.3, "lines"),
+                    seed = 123)+
+    theme_bw()+
+    theme(text = element_text(size=7)) +
+    coord_fixed(ratio = wid/hei)+
+    ggtitle("PCA on binding matrix crc_filtered_tmm")+
+    labs(x= paste0("PC1 ", pc_v[1], "%"),
+         y = paste0("PC2 ", pc_v[2], "%"))
+  
+  p1
+  
+  
+```
