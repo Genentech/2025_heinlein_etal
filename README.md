@@ -1,23 +1,29 @@
-# This repository contains the R/Python scripts used to generate the figures for the manuscript:
+This repository contains the R/Python scripts used to generate the figures for the manuscript:
 
-A high MAPK cell state drives metastatic dissemination in colorectal cancer
+**A high MAPK cell state drives metastatic dissemination in colorectal cancer**
 
 Submitted to Nature Cancer
 
 Melanie Heinlein1, Ginny X Li2, Noelyn Kljavin1, Amanda R Moore1,4, Brian Biehs1, Liming Tao3, Soufiane Boumahdi1, Farnaz Mohammadi5, Minyi Shi6, Yuxin Liang6, Hartmut Koeppen7, Nicolò Riggi3, Robert Piskol4, Frederic J de Sauvage1*
 
-1Department of Research Oncology, Genentech, Inc, South San Francisco, CA, USA.
-2Roche Informatics, Hoffman-La Roche Canada, Mississauga, ON, Canada.
-3Department of Cell and Tissue Genomics, Genentech, Inc, South San Francisco, CA, USA.
-4Department of Discovery Oncology, Genentech, Inc, South San Francisco, CA, USA.
-5gRED Computation Sciences, Genentech, Inc, South San Francisco, CA, USA.
-6Department of Proteomic and Genomic Technologies, Genentech, Inc, South San Francisco, CA, USA.
-7Department of Research Pathology, Genentech, Inc, South San Francisco, CA, USA.
+1 Department of Research Oncology, Genentech, Inc, South San Francisco, CA, USA.
+
+2 Roche Informatics, Hoffman-La Roche Canada, Mississauga, ON, Canada.
+
+3 Department of Cell and Tissue Genomics, Genentech, Inc, South San Francisco, CA, USA.
+
+4 Department of Discovery Oncology, Genentech, Inc, South San Francisco, CA, USA.
+
+5 gRED Computation Sciences, Genentech, Inc, South San Francisco, CA, USA.
+
+6 Department of Proteomic and Genomic Technologies, Genentech, Inc, South San Francisco, CA, USA.
+
+7 Department of Research Pathology, Genentech, Inc, South San Francisco, CA, USA.
 
 Additional information
 	*Corresponding author
 
-The code is provided to ensure transparency and enable the reproduction of the plots
+**The code is provided to ensure transparency and enable the reproduction of the plots**
 
 ## System Requirements 
  - R version 4.2 or higher 
