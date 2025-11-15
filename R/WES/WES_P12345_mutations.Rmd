@@ -1,0 +1,137 @@
+---
+title: "WES_P12345_mutations.Rmd"
+output: html_document
+date: "2025-11-15"
+---
+
+the new P1P2P3P4P5 high freq mutation heatmap
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/gstore/project/crc_metastasis/gitCode/")
+
+```
+
+
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+library(ggplot2)
+library(ComplexHeatmap)
+library(magrittr)
+library(dplyr)
+
+
+r_effect_sort = readRDS("data/WES/r_effect_sort_20250529.rds")
+freq_tile = readRDS("data/WES/freq_tile_20250529.rds")
+read_tile = readRDS("data/WES/read_tile_20250529.rds")
+
+```
+
+
+
+```{r, include=TRUE, message=FALSE, warning=FALSE}
+
+
+max_freq = apply(freq_tile, 1, max)
+which_high = which(max_freq >0.39)
+high_freq_tile = freq_tile[which_high, ]
+high_read_tile = read_tile[which_high,]
+
+high_r_effect_sort = r_effect_sort[which_high,]
+
+high_tile = cbind(high_r_effect_sort, high_freq_tile)%>%
+  dplyr::select(gene, SAM24400842,SAM24400845, SAM24488704, SAM24488703, SAM24400853, alltype)%>%
+    dplyr::mutate(SAM24400842 = case_when(SAM24400842==0 ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::mutate(SAM24400845 = case_when(SAM24400845==0 ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::mutate(SAM24488704 = case_when(SAM24488704==0 ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::mutate(SAM24488703 = case_when(SAM24488703==0 ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::mutate(SAM24400853 = case_when(SAM24400853==0 ~ NA, 
+                          T ~ alltype))%>%
+  dplyr::select(-alltype)
+
+
+
+
+tm=as.matrix(high_tile[, 2:6])
+rownames(tm) = high_tile$gene
+
+ta = HeatmapAnnotation(passage =c("P1","P2", "P3","P4","P5"),
+                       col = list(passage = c("P1" = "#2D8686", "P2"= "#592D86",
+                                              "P3" = "darkorange", "P4"= "darkgreen",
+                                              "P5" = "#862D2D")))
+
+
+dist_mut = function(x, y) {
+  
+  x[is.na(x)] = 0
+  x[which(x == "Missense")] = 1
+  x[which(x == "MissenseNMD")] = 2
+  x[which(x == "NMD")] = 3
+  x[which(x == "Stopgained")] = 4
+  x= as.numeric(x)
+
+  y[is.na(y)] = 0
+  y[which(y == "Missense")] = 1
+  y[which(y == "MissenseNMD")] = 2
+  y[which(y == "NMD")] = 3
+  y[which(y == "Stopgained")] = 4
+  y= as.numeric(y)
+
+  
+    sqrt(sum((x - y)^2))
+}
+
+
+
+square_cal = function(n)
+{
+  if(n > 10)
+  {
+      c = ceiling(log10(n))
+  p = n/(10**c)
+  }else{
+      c = ceiling(log10(n))
+  p = n/(100**c)
+
+  }
+
+  if(n == 1)
+  {
+    p = 0.01
+  }
+
+  return(p)
+
+}
+
+
+hei = unit(square_cal(nrow(tm))*40, "cm")
+
+hm = Heatmap(tm, 
+        name = "mutations", 
+        col = structure(c("seagreen","gold","darkorange","maroon"),
+                                                names = c("Missense","MissenseNMD","NMD","Stopgained")),
+        height = hei, 
+        width = hei*(ncol(tm)/nrow(tm)), 
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 10),
+        column_names_gp = gpar(fontsize = 6),
+        top_annotation = ta, 
+        clustering_distance_rows = dist_mut, 
+        cluster_columns = F
+    )
+
+hm
+
+
+```
+
+
+
+
