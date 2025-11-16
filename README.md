@@ -1,4 +1,4 @@
-This repository contains the R/Python scripts used to generate the figures for the manuscript:
+This repository contains the R scripts used to generate the figures for the manuscript:
 
 **A high MAPK cell state drives metastatic dissemination in colorectal cancer**
 
